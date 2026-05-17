@@ -122,7 +122,7 @@ check_whiptail() {
 generate_litellm_config() {
     cat > "$LITELLM_CONFIG" <<'YAML'
 model_list:
-  - model_name: "local"
+  - model_name: "gpt-4o"
     litellm_params:
       model: "openai/local"
       api_base: "http://host.docker.internal:8080"
