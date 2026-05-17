@@ -1,0 +1,31 @@
+# Large model files
+*.gguf
+
+# Python virtual environment
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.env
+.env.local
+
+# Generated config
+litellm_config.yaml
+
+# Logs
+*.log
