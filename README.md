@@ -178,7 +178,24 @@ curl http://localhost:4000/health
 **Web UI 대시보드**:
 ```
 http://localhost:4000/ui
+Master Key: sk-local-master
 ```
+- 📊 요청 로그 조회
+- 💾 캐시 통계 및 관리
+- 🔑 API 키 관리
+- ⚙️ 모델 라우팅 설정
+
+**API 엔드포인트**:
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer sk-local-master" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"local","messages":[{"role":"user","content":"test"}]}'
+```
+
+**필수 조건**: PostgreSQL 데이터베이스 필요
+- 현재 설정: `postgresql://user:password@host.docker.internal:5433/litellm`
+- 자동으로 테이블 생성 및 마이그레이션 수행
 
 ---
 
@@ -250,6 +267,11 @@ general_settings:
   master_key: "sk-local-master"
 ```
 
+**기능**:
+- ✅ 시맨틱 캐싱: 유사한 요청 즉시 응답
+- ✅ 요청 로깅: 모든 API 호출 기록
+- ✅ 모델 라우팅: 자동으로 llama.cpp로 전달
+
 ---
 
 ## 🚨 문제 해결
@@ -293,6 +315,29 @@ kill -9 <PID>
   docker pull ghcr.io/berriai/litellm:main-latest
   ```
 - liteLLM은 선택사항이므로 "No"를 선택하고 llama.cpp만 사용 가능
+
+### Q5-1: "liteLLM Web UI 접근"
+- **필수**: PostgreSQL 데이터베이스 필요
+- **기본 설정**: 기존 PostgreSQL 활용 (docker_run.sh에서 자동 설정)
+  ```bash
+  DATABASE_URL=postgresql://user:password@host.docker.internal:5433/litellm
+  ```
+- **접근 방법**:
+  1. `./docker_run.sh` 실행
+  2. 모델 선택
+  3. liteLLM Y 선택
+  4. 브라우저: `http://localhost:4000/ui`
+  5. Master Key 입력: `sk-local-master`
+
+- **PostgreSQL이 없는 경우**:
+  - API 기능은 완전히 작동
+  - Web UI 대신 API로 모든 기능 사용 가능:
+    ```bash
+    curl http://localhost:4000/v1/chat/completions \
+      -H "Authorization: Bearer sk-local-master" \
+      -H "Content-Type: application/json" \
+      -d '{"model":"local","messages":[{"role":"user","content":"Hello"}]}'
+    ```
 
 ### Q6: "whiptail command not found"
 ```bash

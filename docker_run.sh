@@ -154,6 +154,7 @@ launch_litellm() {
         --add-host host.docker.internal:host-gateway \
         -p ${LITELLM_PORT}:4000 \
         -v "${LITELLM_CONFIG}:/app/config.yaml" \
+        -e "DATABASE_URL=postgresql://user:password@host.docker.internal:5433/litellm" \
         "$LITELLM_IMAGE" \
         --config /app/config.yaml \
         --port 4000 \
