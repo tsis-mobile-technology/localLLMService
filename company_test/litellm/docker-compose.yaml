@@ -1,0 +1,47 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: litellm
+    restart: unless-stopped
+    pull_policy: never
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./litellm_data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      - postgres
+    command: >
+      --config /app/config.yaml
+      --port 4000
+      --detailed_debug
+    networks:
+      - t-ai-network
+
+  postgres:
+    image: postgres:16
+    container_name: litellm-postgres
+    restart: unless-stopped
+    pull_policy: never
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - t-ai-network
+
+volumes:
+  postgres_data:
+  litellm_data:
+
+networks:
+  t-ai-network:
+    external: true

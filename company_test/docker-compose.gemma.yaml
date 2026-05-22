@@ -1,0 +1,46 @@
+services:
+  vllm-gemma:
+    image: vllm/vllm-openai:latest
+    platform: linux/amd64
+    pull_policy: never
+    container_name: vllm-gemma4
+    ipc: host
+    shm_size: 32g
+    ports:
+      - "8000:8000"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_OFFLINE=1
+      - VLLM_USE_V1=1
+    volumes:
+      - ./models/models--google--gemma-4-31B-it:/root/.cache/huggingface/hub/models--google--gemma-4-31B-it
+      - ./hf_cache:/root/.cache/huggingface
+    command: >
+      --model google/gemma-4-31B-it
+      --tensor-parallel-size 2
+      --gpu-memory-utilization 0.92
+      --max-model-len 131072
+      --max-num-seqs 32
+      --max-num-batched-tokens 8192
+      --enable-auto-tool-choice
+      --tool-call-parser gemma4
+      --reasoning-parser gemma4
+      --host 0.0.0.0
+      --port 8000
+      --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0', '1']
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - t-ai-network
+
+networks:
+  t-ai-network:
+    name: t-ai-network
+   
