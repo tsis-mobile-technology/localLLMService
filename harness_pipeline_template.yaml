@@ -1,0 +1,44 @@
+# Harness STO Container Scan Pipeline Template (Aqua Trivy)
+# 이 템플릿은 ghcr.io/ggml-org/llama.cpp:server-cuda 퍼블릭 이미지를
+# 독립된 SecurityTests 스테이지에서 Aqua Trivy 스캐너를 통해 스캔하도록 설정되어 있습니다.
+
+- stage:
+    name: Container Security Verify
+    identifier: Container_Security_Verify
+    type: SecurityTests
+    spec:
+      cloneCodebase: false  # 소스 코드 복제 생략 (외부 이미지만 풀하여 스캔)
+      infrastructure:
+        type: KubernetesDirect
+        spec:
+          connectorRef: account.stoqadelegate  # Harness Delegate 커넥터 식별자 기입
+          namespace: harness-delegate          # Delegate가 구동 중인 네임스페이스 기입
+          automountServiceAccountToken: true
+          nodeSelector: {}
+          os: Linux
+      execution:
+        steps:
+          # 1. Llama.cpp CUDA 서버 이미지 보안 스캔 스텝
+          - step:
+              type: AquaTrivy
+              name: Llama_Server_Trivy_Scan
+              identifier: Llama_Server_Trivy_Scan
+              spec:
+                mode: orchestration
+                config: default
+                target:
+                  type: container
+                  detection: auto
+                advanced:
+                  log:
+                    level: info
+                resources:
+                  limits:
+                    memory: 2G
+                    cpu: 1000m
+                privileged: true
+                image:
+                  type: docker_v2
+                  domain: ghcr.io
+                  name: ggml-org/llama.cpp
+                  tag: server-cuda

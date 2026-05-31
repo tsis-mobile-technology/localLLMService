@@ -1,0 +1,31 @@
+model_list:
+  - model_name: "gpt-4o"
+    litellm_params:
+      model: "openai/google/gemma-4-E4B-it"
+      api_base: "http://host.docker.internal:30000/v1"
+      api_key: "sk-local"
+  - model_name: "gemma-4"
+    litellm_params:
+      model: "openai/google/gemma-4-E4B-it"
+      api_base: "http://host.docker.internal:30000/v1"
+      api_key: "sk-local"
+  - model_name: "gemma-4-bf16"
+    litellm_params:
+      model: "openai/google/gemma-4-E4B-it"
+      api_base: "http://host.docker.internal:30000/v1"
+      api_key: "sk-local"
+  - model_name: "gemma-4-fp8"
+    litellm_params:
+      model: "openai/vrfai/gemma-4-E4B-it-fp8"
+      api_base: "http://host.docker.internal:30000/v1"
+      api_key: "sk-local"
+
+litellm_settings:
+  drop_params: true
+  cache: true
+  cache_params:
+    type: "local"
+    supported_call_types: ["completion", "text_completion"]
+
+general_settings:
+  master_key: "sk-local-master"
