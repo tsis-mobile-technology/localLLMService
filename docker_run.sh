@@ -24,13 +24,15 @@ readonly LITELLM_MASTER_KEY="sk-local-master"
 
 # --- Model Definitions (parallel arrays indexed 0-3) -----------------------
 readonly MODEL_NAMES=(
-    "Gemma 4 E4B"
+    "Gemma 4 E4B Q4"
+    "Gemma 4 E4B Q8"
     "Gemma 4 31B"
     "Gemma 4 26B A4B"
     "Qwen 3.6 35B A3B"
 )
 
 readonly MODEL_FILES=(
+    "google_gemma-4-E4B-it-Q4_K_M.gguf"
     "google_gemma-4-E4B-it-Q8_0.gguf"
     "google_gemma-4-31B-it-Q4_K_M.gguf"
     "google_gemma-4-26B-A4B-it-Q4_K_M.gguf"
@@ -38,7 +40,8 @@ readonly MODEL_FILES=(
 )
 
 readonly MODEL_DESCS=(
-    "Q8_0  │ 128K ctx │ Full GPU"
+    "Q4_K_M  │ 131K ctx │ Full GPU"
+    "Q8_0  │ 131K ctx │ Full GPU"
     "Q4_K_M │ 18K ctx  │ 22 GPU layers"
     "Q4_K_M │ 70K ctx  │ MoE CPU offload"
     "Q4_0  │ 70K ctx  │ MoE CPU offload"
@@ -46,6 +49,7 @@ readonly MODEL_DESCS=(
 
 # Additional docker args for each model (common args handled separately)
 readonly MODEL_EXTRA_ARGS=(
+    "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131000"
     "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 128000"
     "--n-gpu-layers 22 -c 18192 --cache-type-k q4_0 --cache-type-v q4_0"
     "--n-cpu-moe 22 --no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 70000"

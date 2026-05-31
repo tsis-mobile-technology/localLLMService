@@ -446,11 +446,15 @@ console.log(message.choices[0].message.content);
 
 ### cURL
 ```bash
+curl http://localhost:4000/v1/models \
+  -H "Authorization: Bearer sk-local-master"
+```
+```bash
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-local-master" \
   -d '{
-    "model": "local",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "안녕하세요"}],
     "temperature": 0.7,
     "max_tokens": 256
