@@ -1,9 +1,12 @@
 #!/bin/bash
 
 # Configuration
-BASE_URL="http://172.25.110.204:4000/v1"
-API_KEY="sk-drPtCcb3695mAXc_5_SRlg"
-MODEL="gemma-4-31b"
+#BASE_URL="http://172.25.110.204:4000/v1"
+BASE_URL="http://localhost:4000/v1"
+#API_KEY="sk-drPtCcb3695mAXc_5_SRlg"
+API_KEY="sk-local-master"
+MODEL="gpt-4o"
+# "gemma-4-31b"
 
 echo "=================================================="
 echo "🚀 Testing API Endpoint"
