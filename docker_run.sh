@@ -26,7 +26,7 @@ readonly LITELLM_MASTER_KEY="sk-local-master"
 readonly MODEL_NAMES=(
     "Gemma 4 E4B Q4"
     "Gemma 4 E4B Q8"
-    "Gemma 4 12B Q8"
+    "Gemma 4 12B Q4"
     "Gemma 4 31B"
     "Gemma 4 26B A4B"
     "Qwen 3.6 35B A3B"
