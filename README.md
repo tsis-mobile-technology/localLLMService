@@ -1,6 +1,6 @@
-# 🦙 Local LLM Service - LLaMA.cpp + liteLLM
+# 🦙 Local LLM Service - LLaMA.cpp + liteLLM + SGLang
 
-대화형 쉘 스크립트를 통한 로컬 LLM 서비스 관리 도구입니다. **whiptail TUI** 메뉴로 모델을 선택하고, **liteLLM 프록시**를 선택적으로 추가하여 시맨틱 캐싱, 로깅, Web UI 대시보드 등의 기능을 활용할 수 있습니다.
+**NVIDIA GB10 Grace Blackwell 워크스테이션(2EA)** 최적화 버전입니다. 대화형 쉘 스크립트를 통한 로컬 LLM 서비스 관리 도구로, **whiptail TUI** 메뉴로 모델을 선택하고, **liteLLM 프록시**를 선택적으로 추가하여 시맨틱 캐싱, 로깅, Web UI 대시보드 등의 기능을 활용할 수 있습니다.
 
 ## 🌟 주요 기능
 
@@ -9,13 +9,18 @@
 - 모델 파일 자동 감지 (파일 존재 여부, 크기 표시)
 - 현재 컨테이너 상태 실시간 표시
 
-### 🚀 4가지 LLM 모델 지원
-| 모델 | 파일 | 크기 | 컨텍스트 | 특징 |
-|------|------|------|---------|------|
-| **Gemma 4 E4B** | google_gemma-4-E4B-it-Q8_0.gguf | 7.5G | 128K | Full GPU |
-| **Gemma 4 31B** | google_gemma-4-31B-it-Q4_K_M.gguf | 19G | 18K | 22 GPU Layers |
-| **Gemma 4 26B A4B** | google_gemma-4-26B-A4B-it-Q4_K_M.gguf | 16G | 70K | MoE CPU Offload |
-| **Qwen 3.6 35B A3B** | Qwen_Qwen3.6-35B-A3B-Q4_0.gguf | 19G | 70K | MoE CPU Offload |
+### 🚀 다양한 LLM 모델 지원 (Grace Blackwell 최적화)
+| 모델 | 크기 | 컨텍스트 | 특징 |
+|------|------|---------|------|
+| **GLM-5.2** (권장) | 5.2B | 128K | 빠른 응답, BF16/FP8 지원 |
+| **Gemma 4 E4B** | 4B/8B | 131K | 초경량, 풀 GPU 실행 |
+| **Gemma 4 31B** | 31B | 256K | 고성능, 64 GPU 레이어 |
+| **Gemma 4 26B A4B** | 26B | 256K | MoE 혼합, GPU 최적화 |
+| **Qwen 3.6 35B A3B** | 35B | 256K | MoE 고급, Sparse 처리 |
+| **Gemma 2 9B** | 9B | 8K | Dense 경량 |
+| **Qwen 2.5 7B** | 7B | 131K | Dense 컴팩트 |
+
+**LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**
 
 ### 💎 선택적 liteLLM 프록시 레이어
 ```
@@ -46,8 +51,17 @@
 
 ### 권장
 - NVIDIA GPU (llama.cpp 가속)
+- **Grace Blackwell 워크스테이션**: 128GB LPDDRX, 2x Superchip, ConnectX7 (최적화됨)
 - 최소 16GB RAM (모델 로드용)
 - 최소 50GB 디스크 (모델 파일)
+
+### Grace Blackwell 최적화 기능
+✅ 128GB LPDDRX 메모리 풀 활용  
+✅ 듀얼 Superchip 분산 처리 (TP=2 지원)  
+✅ ConnectX7 고대역폭 네트워킹 자동 인식  
+✅ TF32 정밀도 최적화  
+✅ 대용량 컨텍스트 지원 (256K tokens)  
+✅ 배치 처리 최적화 (n=16384)
 
 ### 확인 방법
 ```bash
@@ -74,17 +88,28 @@ chmod +x docker_run.sh docker_stop.sh
 ```
 
 ### 2️⃣ 모델 파일 준비
-모델 파일을 저장소 디렉토리에 배치합니다:
+
+#### LLaMA.cpp 모델 (`.gguf` 형식)
 ```bash
-# 다음 4개 파일 중 필요한 것들을 다운로드
 ~/Programming/models/
+├── GLM-5.2-it-BF16.gguf          # 권장 (빠름)
+├── GLM-5.2-it-FP8.gguf           # 더 빠름
+├── google_gemma-4-E4B-it-Q4_K_M.gguf
 ├── google_gemma-4-E4B-it-Q8_0.gguf
 ├── google_gemma-4-31B-it-Q4_K_M.gguf
 ├── google_gemma-4-26B-A4B-it-Q4_K_M.gguf
 └── Qwen_Qwen3.6-35B-A3B-Q4_0.gguf
 ```
 
-> 💡 **팁**: HuggingFace 또는 Ollama에서 `.gguf` 형식 모델 다운로드
+#### SGLang 모델 (자동 다운로드)
+- `zai-org/GLM-5.2` (추천)
+- `zai-org/GLM-5.2-Multi-Vision`
+- `google/gemma-4-E4B-it` 등
+
+> 💡 **팁**: 
+> - LLaMA.cpp: [ollama.ai](https://ollama.ai) 또는 [huggingface.co](https://huggingface.co)에서 `.gguf` 형식 다운로드
+> - SGLang: Hugging Face Hub에서 자동 다운로드 (첫 실행 시 ~30GB 소요 가능)
+> - GLM-5.2: https://huggingface.co/zai-org/GLM-5.2
 
 ### 3️⃣ 스크립트 실행
 
@@ -237,40 +262,95 @@ curl http://localhost:4000/v1/chat/completions \
 
 ---
 
-## 🏗️ 아키텍처
+## 🏗️ 아키텍처 (Grace Blackwell 최적화)
 
 ### 아키텍처 다이어그램
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    Your Applications                      │
-│         (Claude, Python SDK, Web App, etc.)             │
-└──────────────────────┬───────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    Your Applications                          │
+│         (Claude, Python SDK, Web App, etc.)                 │
+└──────────────────────┬───────────────────────────────────────┘
                        │
-                       ▼ (Optional with caching & logging)
-            ┌─────────────────────┐
-            │   liteLLM Proxy     │
-            │   :4000             │
-            │ ✨ Caching, UI      │
-            └────────────┬────────┘
+        ┌──────────────┴───────────────┐
+        ▼                              ▼
+┌──────────────────┐        ┌──────────────────┐
+│  liteLLM Proxy   │        │ SGLang Server    │
+│    :4000         │        │    :30000        │
+│ Caching, Logging │        │ Fast Inference   │
+└────────┬─────────┘        └────────┬─────────┘
+         │                           │
+         └──────────────┬────────────┘
+                        ▼
+            ┌─────────────────────────┐
+            │   LLaMA.cpp Server      │
+            │      :8080              │
+            │ 🚀 GPU Inference        │
+            └────────────┬────────────┘
                          │
-                         ▼ (OpenAI API compatible)
-            ┌─────────────────────┐
-            │  llama.cpp Server   │
-            │  :8080              │
-            │ 🚀 GPU Inference    │
-            └────────────┬────────┘
-                         │
-                         ▼
-            ┌─────────────────────┐
-            │   LLM Models        │
-            │ 📦 4 models (7.5-19G) │
-            └─────────────────────┘
+            ┌────────────┴────────────┐
+            ▼                         ▼
+    ┌─────────────────┐      ┌─────────────────┐
+    │  GPU 0          │      │  GPU 1          │
+    │ (Superchip)     │◄────►│ (Superchip)     │
+    │ ConnectX7       │      │ ConnectX7       │
+    └─────────────────┘      └─────────────────┘
+            │
+            ▼
+    ┌─────────────────┐
+    │   LLM Models    │
+    │  5-35B Models   │
+    │ 128GB LPDDRX    │
+    └─────────────────┘
 ```
 
 ### 네트워킹
 - **호스트 → llama.cpp**: `http://localhost:8080`
 - **호스트 → liteLLM**: `http://localhost:4000`
 - **liteLLM → llama.cpp**: `http://host.docker.internal:8080` (Docker 컨테이너 간)
+
+---
+
+## 🎯 Grace Blackwell 워크스테이션 최적화
+
+### 하드웨어 구성
+```
+✅ 2x NVIDIA GB10 Grace Blackwell Superchip
+✅ 128GB LPDDRX Memory (고대역폭)
+✅ 4TB SSD
+✅ NVIDIA ConnectX7 (400Gbps 인터커넥트)
+```
+
+### 최적화된 파라미터
+
+#### LLaMA.cpp (`docker_run.sh`)
+- **메모리 할당**: 100GB shm-size, 124GB 메모리 제한
+- **GPU 레이어**: 최대 64개 (전체 모델 GPU에 로드)
+- **컨텍스트**: 256K 토큰까지 지원
+- **배치 크기**: n=16384 (대규모 배치 처리)
+- **캐시 타입**: F16 (높은 정밀도) 또는 Q4_0
+- **CUDA 최적화**:
+  - `CUDA_VISIBLE_DEVICES=0,1` (듀얼 GPU)
+  - `NVIDIA_TF32=1` (텐서 코어 최적화)
+  - `NVIDIA_DISABLE_MPS=0` (멀티프로세스 서비스)
+
+#### SGLang (`docker_run_sglang.sh`)
+- **메모리 할당**: 120GB shm-size, 124GB 메모리 제한
+- **테너 병렬처리 (TP)**: 1-2 (모델 크기에 따라)
+- **데이터 타입**: BF16 (높은 성능과 정밀도)
+- **메모리 분수**: 0.85-0.95 (그래픽 메모리 최대 활용)
+- **토큰 제한**: 131K-256K
+- **환경 변수**:
+  - `NCCL_LAUNCH_MODE=PARALLEL` (분산 처리 최적화)
+  - `NVIDIA_TF32=1` (텐서 코어 활용)
+
+### 멀티 GPU 지원
+
+**동시 실행 시나리오**:
+```bash
+# GPU 0: 대규모 모델 (31B, 35B)
+# GPU 1: 소규모 모델 (5B, 9B) 또는 캐싱 레이어
+# ConnectX7: 고속 통신으로 분산 처리 효율 극대화
+```
 
 ---
 
@@ -386,9 +466,11 @@ sudo yum install newt
 
 | 사용 환경 | 권장 모델 | 이유 |
 |---------|---------|------|
-| **제한된 VRAM** (< 12GB) | Gemma 4 E4B (7.5G) | 가장 작음, 빠름 |
-| **중간 VRAM** (12-24GB) | Gemma 4 31B (19G) | 성능 ↑ |
-| **고성능 서버** (> 24GB) | Qwen 3.6 35B A3B (19G) | 최고 품질 |
+| **Grace Blackwell (128GB)** | GLM-5.2 / Gemma 4 31B | 최적화됨, 빠른 응답 |
+| **빠른 응답** | GLM-5.2 BF16 | 5.2B, 낮은 지연시간 |
+| **멀티모달** | GLM-5.2-Multi-Vision | 이미지/텍스트 처리 |
+| **최고 품질** | Qwen 3.6 35B A3B | 복잡한 추론 |
+| **경량 (CPU 제한)** | Gemma 4 E4B | 4B, 초경량 |
 | **멀티클라이언트** | liteLLM 포함 | 캐싱으로 속도 향상 |
 
 ### 최적화 팁
@@ -466,16 +548,27 @@ curl http://localhost:4000/v1/chat/completions \
 ## 📋 파일 구조
 ```
 localLLMService/
-├── docker_run.sh          # 메인 스크립트 (모델 선택, liteLLM 옵션)
-├── docker_stop.sh         # 컨테이너 정지 스크립트
-├── .gitignore             # Git 제외 규칙 (*.gguf, venv/ 제외)
-└── README.md              # 이 파일
+├── docker_run.sh              # LLaMA.cpp 메인 스크립트 (Grace Blackwell 최적화)
+├── docker_run_sglang.sh       # SGLang 고성능 추론 스크립트
+├── docker_stop.sh             # 컨테이너 정지 스크립트
+├── docker_stop_sglang.sh      # SGLang 컨테이너 정지 스크립트
+├── clippable_linear.py        # SGLang 커스텀 레이어
+├── weight_utils.py            # 가중치 로더 최적화
+├── litellm_config_sglang.yaml # SGLang liteLLM 설정
+├── .gitignore                 # Git 제외 규칙 (*.gguf, venv/ 제외)
+└── README.md                  # 이 파일
 
 ~/Programming/models/
+├── GLM-5.2-it-BF16.gguf           # 권장 모델
+├── GLM-5.2-it-FP8.gguf
+├── google_gemma-4-E4B-it-Q4_K_M.gguf
 ├── google_gemma-4-E4B-it-Q8_0.gguf
 ├── google_gemma-4-31B-it-Q4_K_M.gguf
 ├── google_gemma-4-26B-A4B-it-Q4_K_M.gguf
 └── Qwen_Qwen3.6-35B-A3B-Q4_0.gguf
+
+~/.cache/huggingface/hub/
+└── models--zai-org--GLM-5.2/     # SGLang 자동 다운로드
 ```
 
 ---
@@ -530,6 +623,18 @@ docker logs --tail 100 llama-server
 
 ---
 
-**Last Updated**: 2026-05-17  
+**Last Updated**: 2026-06-24  
+**Version**: 2.0 (Grace Blackwell Optimization)  
 **Author**: Claude Code  
 **Repository**: https://github.com/tsis-mobile-technology/localLLMService
+
+### 변경사항 (v2.0)
+- ✨ **GLM-5.2 모델 추가** (권장)
+- 🎯 **NVIDIA GB10 Grace Blackwell 최적화**
+  - 128GB LPDDRX 메모리 풀 활용
+  - 듀얼 Superchip 분산 처리 (TP=2)
+  - ConnectX7 고대역폭 인터커넥트
+  - 256K 토큰 컨텍스트 지원
+  - TF32 정밀도 최적화
+- 🚀 **SGLang 고성능 추론 엔진 지원**
+- 📊 **확장된 모델 라이브러리** (7가지 모델)

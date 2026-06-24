@@ -22,42 +22,48 @@ readonly LITELLM_IMAGE="ghcr.io/berriai/litellm:main-latest"
 readonly LITELLM_CONFIG="$MODELS_DIR/litellm_config.yaml"
 readonly LITELLM_MASTER_KEY="sk-local-master"
 
-# --- Model Definitions (parallel arrays indexed 0-3) -----------------------
+# --- Model Definitions (parallel arrays) -----------------------------------
+# Optimized for NVIDIA GB10 Grace Blackwell: 128GB LPDDRX, 2x Superchips, ConnectX7
 readonly MODEL_NAMES=(
+    "GLM-5.2 BF16 (Recommended for GB10)"
+    "GLM-5.2 FP8"
     "Gemma 4 E4B Q4"
     "Gemma 4 E4B Q8"
-    "Gemma 4 12B Q4"
     "Gemma 4 31B"
     "Gemma 4 26B A4B"
     "Qwen 3.6 35B A3B"
 )
 
 readonly MODEL_FILES=(
+    "GLM-5.2-it-BF16.gguf"
+    "GLM-5.2-it-FP8.gguf"
     "google_gemma-4-E4B-it-Q4_K_M.gguf"
     "google_gemma-4-E4B-it-Q8_0.gguf"
-    "gemma-4-12b-it-Q4_K_M.gguf"
     "google_gemma-4-31B-it-Q4_K_M.gguf"
     "google_gemma-4-26B-A4B-it-Q4_K_M.gguf"
     "Qwen_Qwen3.6-35B-A3B-Q4_0.gguf"
 )
 
 readonly MODEL_DESCS=(
-    "Q4_K_M  │ 131K ctx │ Full GPU"
-    "Q8_0  │ 131K ctx │ Full GPU"
-    "Q4_K_M  │ 131K ctx │ Full GPU"
-    "Q4_K_M │ 18K ctx  │ 22 GPU layers"
-    "Q4_K_M │ 70K ctx  │ MoE CPU offload"
-    "Q4_0  │ 70K ctx  │ MoE CPU offload"
+    "BF16  │ 128K ctx │ Full Precision │ 5.2B Fast"
+    "FP8   │ 128K ctx │ Quantized     │ 5.2B Faster"
+    "Q4_K_M  │ 131K ctx │ Full GPU    │ 4B"
+    "Q8_0  │ 131K ctx │ Full GPU      │ 4B Premium"
+    "Q4_K_M │ 256K ctx │ Full GPU      │ 31B High Performance"
+    "Q4_K_M │ 256K ctx │ MoE GPU       │ 26B MoE Hybrid"
+    "Q4_0  │ 256K ctx │ MoE GPU       │ 35B MoE Advanced"
 )
 
-# Additional docker args for each model (common args handled separately)
+# Grace Blackwell optimization: Full GPU support, large context, high precision
+# 128GB LPDDRX allows full model loading for larger models
 readonly MODEL_EXTRA_ARGS=(
-    "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131000"
-    "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 128000"
-    "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 128000"
-    "--n-gpu-layers 22 -c 18192 --cache-type-k q4_0 --cache-type-v q4_0"
-    "--n-cpu-moe 22 --no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 70000"
-    "--n-cpu-moe 20 --no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 70000"
+    "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192"
+    "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192"
+    "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192"
+    "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192"
+    "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384"
+    "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384"
+    "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384"
 )
 
 # --- Utility Functions -------------------------------------------------------
@@ -193,7 +199,7 @@ show_model_menu() {
 
     # Build menu items array
     local menu_items=()
-    for i in {0..5}; do
+    for i in "${!MODEL_NAMES[@]}"; do
         local id=$((i + 1))
         local name="${MODEL_NAMES[$i]}"
         local desc="${MODEL_DESCS[$i]}"
@@ -216,9 +222,9 @@ show_model_menu() {
     # Show whiptail menu
     local choice
     choice=$(whiptail \
-        --title "🦙 LLaMA.cpp Model Launcher" \
+        --title "🦙 LLaMA.cpp Model Launcher (Grace Blackwell Optimized)" \
         --menu "Status: $status_line\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
-        24 85 4 \
+        28 95 7 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 
@@ -290,27 +296,37 @@ stop_existing_container() {
     fi
 }
 
-# Launch the selected model
+# Launch the selected model with Grace Blackwell optimization
 launch_model() {
     local choice="$1"
     local idx=$((choice - 1))
     local model_file="${MODEL_FILES[$idx]}"
     local extra_args="${MODEL_EXTRA_ARGS[$idx]}"
 
-    # Build and execute docker command
+    # Grace Blackwell specific optimizations
+    # 128GB LPDDRX, Dual Superchip support, ConnectX7 fabric awareness
     docker run -d --name "$CONTAINER_NAME" \
         --gpus all \
         --cap-add IPC_LOCK \
+        --cap-add SYS_ADMIN \
         --ulimit memlock=-1:-1 \
+        --ulimit stack=67108864 \
+        --shm-size 100g \
+        --memory 124g \
         -p ${PORT}:8080 \
         -v "${MODELS_DIR}:/models" \
+        -e CUDA_VISIBLE_DEVICES=0,1 \
+        -e NVIDIA_TF32=1 \
+        -e NVIDIA_DISABLE_MPS=0 \
         "$DOCKER_IMAGE" \
         -m "/models/${model_file}" \
+        --threads-per-core 4 \
+        --threads 32 \
         $extra_args \
         2>/dev/null || {
         whiptail --title "❌ Docker Error" \
-            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- GPU support is enabled" \
-            12 70
+            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled on Grace Blackwell" \
+            14 75
         return 1
     }
 }

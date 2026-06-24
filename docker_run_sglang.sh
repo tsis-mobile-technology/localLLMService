@@ -22,41 +22,47 @@ readonly LITELLM_IMAGE="ghcr.io/berriai/litellm:main-latest"
 readonly LITELLM_CONFIG="$HOME/Programming/models/litellm_config_sglang.yaml"
 
 # --- Model Definitions (parallel arrays) -----------------------------------
+# Optimized for NVIDIA GB10 Grace Blackwell: 128GB LPDDRX, 2x Superchips, ConnectX7
 readonly MODEL_NAMES=(
-    "Gemma 4 E4B IT (BF16 Offload)"
-    "Gemma 4 E4B IT (AWQ - <pad> Issue)"
-    "Gemma 4 E4B IT (FP8 - Rec. 100% GPU)"
+    "GLM-5.2 (Recommended for GB10)"
+    "GLM-5.2-Multi-Vision"
+    "Gemma 4 E4B IT (FP8 - 100% GPU)"
+    "Gemma 4 E4B IT (BF16 Full Precision)"
     "Qwen 3.6 35B A3B Instruct"
     "Gemma 2 9B IT"
     "Qwen 2.5 7B Instruct"
 )
 
 readonly MODEL_IDS=(
-    "google/gemma-4-E4B-it"
-    "Chunity/gemma-4-E4B-it-AWQ-4bit"
+    "zai-org/GLM-5.2"
+    "zai-org/GLM-5.2-Multi-Vision"
     "vrfai/gemma-4-E4B-it-fp8"
+    "google/gemma-4-E4B-it"
     "Qwen/Qwen3.6-35B-A3B-Instruct"
     "google/gemma-2-9b-it"
     "Qwen/Qwen2.5-7B-Instruct"
 )
 
 readonly MODEL_DESCS=(
-    "4.5B/8B │ Text/Image/Audio │ Gemma 4 BF16 + 8GB CPU Offload"
-    "4.5B/8B │ Text/Image/Audio │ Gemma 4 AWQ (May output <pad>)"
-    "4.5B/8B │ Text/Image/Audio │ Gemma 4 FP8 (vrfai) 100% GPU"
-    "35B/3B  │ Sparse MoE       │ Qwen 3.6 MoE"
-    "9B      │ Dense            │ Gemma 2 Dense"
-    "7B      │ Dense            │ Qwen 2.5 Dense"
+    "5.2B Dense │ Fast Inference │ 128K context │ Rec. GB10"
+    "5.2B Vision │ Multimodal     │ 128K context │ Vision Capable"
+    "4.5B/8B │ Text/Image/Audio │ FP8 100% GPU │ Gemma 4"
+    "4.5B/8B │ Text/Image/Audio │ BF16 Full    │ Gemma 4 Premium"
+    "35B/3B  │ Sparse MoE       │ 256K context │ Qwen Advanced"
+    "9B      │ Dense            │ 8K context   │ Gemma 2 Light"
+    "7B      │ Dense            │ 131K context │ Qwen Compact"
 )
 
-# Additional docker / sglang args for each model
+# Grace Blackwell optimization: Maximize tensor parallelism, high mem fraction
+# 128GB allows aggressive offloading and large batch processing
 readonly MODEL_EXTRA_ARGS=(
-    "--tp 1 --cpu-offload-gb 8 --mem-fraction-static 0.70"
-    "--tp 1 --quantization awq --dtype float16 --mem-fraction-static 0.75 --cpu-offload-gb 3"
-    "--tp 1 --quantization modelopt --mem-fraction-static 0.85"
-    "--tp 1 --cpu-offload-gb 28 --mem-fraction-static 0.70"
-    "--tp 1 --cpu-offload-gb 8 --mem-fraction-static 0.70"
-    "--tp 1 --cpu-offload-gb 8 --mem-fraction-static 0.70"
+    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
+    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
+    "--tp 1 --quantization fp8 --mem-fraction-static 0.95 --max-total-tokens 131072"
+    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
+    "--tp 2 --dtype bfloat16 --mem-fraction-static 0.85 --cpu-offload-gb 20 --max-total-tokens 256000"
+    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
+    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.95 --max-total-tokens 131072"
 )
 
 # --- Utility Functions -------------------------------------------------------
@@ -235,9 +241,9 @@ show_model_menu() {
     # Show whiptail menu
     local choice
     choice=$(whiptail \
-        --title "🚀 SGLang Model Launcher" \
+        --title "🚀 SGLang Model Launcher (Grace Blackwell Optimized)" \
         --menu "Status: $status_line\n\nSelect a model to launch:\n[✓] Cache exists  [✗] Missing (Will download)" \
-        24 90 6 \
+        30 100 7 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 
@@ -305,34 +311,42 @@ stop_existing_container() {
     fi
 }
 
-# Launch the selected model
+# Launch the selected model with Grace Blackwell optimization
 launch_model() {
     local choice="$1"
     local idx=$((choice - 1))
     local model_id="${MODEL_IDS[$idx]}"
     local extra_args="${MODEL_EXTRA_ARGS[$idx]}"
 
-    # Execute docker run with optimized configs for sglang
+    # Grace Blackwell specific optimizations: 128GB LPDDRX, 2x Superchip, ConnectX7
     docker run -d --name "$CONTAINER_NAME" \
         --gpus all \
         --ipc=host \
-        --shm-size 32g \
+        --shm-size 120g \
+        --memory 124g \
         --ulimit memlock=-1:-1 \
         --ulimit stack=67108864 \
+        --cap-add IPC_LOCK \
+        --cap-add SYS_ADMIN \
         -p ${PORT}:30000 \
         -v "${HF_CACHE_DIR}:/root/.cache/huggingface" \
         -v "$(pwd)/clippable_linear.py:/sgl-workspace/sglang/python/sglang/srt/layers/clippable_linear.py" \
         -v "$(pwd)/weight_utils.py:/sgl-workspace/sglang/python/sglang/srt/model_loader/weight_utils.py" \
+        -e CUDA_VISIBLE_DEVICES=0,1 \
+        -e NVIDIA_TF32=1 \
+        -e NVIDIA_DISABLE_MPS=0 \
+        -e NCCL_LAUNCH_MODE=PARALLEL \
         "$DOCKER_IMAGE" \
         python3 -m sglang.launch_server \
         --model-path "$model_id" \
         --host 0.0.0.0 \
         --port 30000 \
+        --trust-remote-code \
         $extra_args \
         2>/dev/null || {
         whiptail --title "❌ Docker Error" \
-            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- GPU (CUDA) support is enabled\n- NVIDIA Container Toolkit is installed" \
-            12 70
+            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled on Grace Blackwell\n- Sufficient disk space in HF cache (~30GB for large models)" \
+            14 75
         return 1
     }
 }
