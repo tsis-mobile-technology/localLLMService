@@ -2,11 +2,10 @@
 set -euo pipefail
 
 # ============================================================================
-# SGLang Interactive Docker Model Launcher
+# SGLang Interactive Docker Model Launcher (Multi-Hardware Support)
 # ============================================================================
-# Provides a whiptail TUI for selecting and launching different LLM models
-# using SGLang with Docker. Supports model cache validation, container
-# status checking, and automatic log tailing.
+# Auto-detects hardware profile and optimizes inference parameters.
+# Supports: < 12GB (Gemma 4 E4B), 12-24GB (Gemma 4 31B), > 24GB (Qwen 35B)
 # ============================================================================
 
 # --- Constants ---------------------------------------------------------------
@@ -14,6 +13,11 @@ readonly HF_CACHE_DIR="$HOME/.cache/huggingface"
 readonly CONTAINER_NAME="sglang-server"
 readonly DOCKER_IMAGE="lmsysorg/sglang:latest"
 readonly PORT=30000
+
+# Hardware profile detection (will be set by detect_hardware_profile)
+HARDWARE_PROFILE=""
+GPU_MEMORY_GB=0
+SYSTEM_MEMORY_GB=0
 
 # liteLLM Integration (optional proxy layer for caching/logging/UI)
 readonly LITELLM_CONTAINER="litellm-proxy"
@@ -53,17 +57,85 @@ readonly MODEL_DESCS=(
     "7B      │ Dense            │ 131K context │ Qwen Compact"
 )
 
-# Grace Blackwell optimization: Maximize tensor parallelism, high mem fraction
-# 128GB allows aggressive offloading and large batch processing
-readonly MODEL_EXTRA_ARGS=(
-    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
-    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
-    "--tp 1 --quantization fp8 --mem-fraction-static 0.95 --max-total-tokens 131072"
-    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
-    "--tp 2 --dtype bfloat16 --mem-fraction-static 0.85 --cpu-offload-gb 20 --max-total-tokens 256000"
-    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072"
-    "--tp 1 --dtype bfloat16 --mem-fraction-static 0.95 --max-total-tokens 131072"
-)
+# Model-specific SGLang arguments optimized per hardware profile
+# Format: get_model_args <model_index> returns appropriate args for current HARDWARE_PROFILE
+get_model_args() {
+    local model_idx=$1
+
+    case "$HARDWARE_PROFILE" in
+        LOW)  # < 12GB VRAM: Minimal tensor parallelism, low mem fraction, small batch
+            case $model_idx in
+                0)  echo "--tp 1 --dtype float16 --mem-fraction-static 0.60 --max-total-tokens 16384 --batch-size 1" ;;
+                1)  echo "--tp 1 --dtype float16 --mem-fraction-static 0.60 --max-total-tokens 16384 --batch-size 1" ;;
+                2)  echo "--tp 1 --quantization fp8 --mem-fraction-static 0.65 --max-total-tokens 32768 --batch-size 2" ;;
+                3)  echo "--tp 1 --dtype float16 --mem-fraction-static 0.60 --max-total-tokens 16384 --batch-size 1" ;;
+                4)  echo "--tp 1 --dtype float16 --mem-fraction-static 0.55 --cpu-offload-gb 8 --max-total-tokens 32768 --batch-size 1" ;;
+                5)  echo "--tp 1 --dtype float16 --mem-fraction-static 0.70 --max-total-tokens 32768 --batch-size 2" ;;
+                6)  echo "--tp 1 --dtype float16 --mem-fraction-static 0.70 --max-total-tokens 65536 --batch-size 2" ;;
+            esac
+            ;;
+        MEDIUM)  # 12-24GB VRAM: Balanced tensor parallelism, moderate mem fraction
+            case $model_idx in
+                0)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.75 --max-total-tokens 65536 --batch-size 4" ;;
+                1)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.75 --max-total-tokens 65536 --batch-size 4" ;;
+                2)  echo "--tp 1 --quantization fp8 --mem-fraction-static 0.80 --max-total-tokens 65536 --batch-size 4" ;;
+                3)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.75 --max-total-tokens 65536 --batch-size 4" ;;
+                4)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.70 --cpu-offload-gb 12 --max-total-tokens 128000 --batch-size 2" ;;
+                5)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.80 --max-total-tokens 65536 --batch-size 4" ;;
+                6)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.80 --max-total-tokens 131072 --batch-size 4" ;;
+            esac
+            ;;
+        HIGH)  # > 24GB VRAM (Grace Blackwell): Full tensor parallelism, high mem fraction
+            case $model_idx in
+                0)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072 --batch-size 8" ;;
+                1)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072 --batch-size 8" ;;
+                2)  echo "--tp 1 --quantization fp8 --mem-fraction-static 0.95 --max-total-tokens 131072 --batch-size 8" ;;
+                3)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072 --batch-size 8" ;;
+                4)  echo "--tp 2 --dtype bfloat16 --mem-fraction-static 0.85 --cpu-offload-gb 20 --max-total-tokens 256000 --batch-size 16" ;;
+                5)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.90 --max-total-tokens 131072 --batch-size 8" ;;
+                6)  echo "--tp 1 --dtype bfloat16 --mem-fraction-static 0.95 --max-total-tokens 131072 --batch-size 8" ;;
+            esac
+            ;;
+    esac
+}
+
+# --- Hardware Detection Functions -------------------------------------------
+
+# Detect available GPU memory
+detect_gpu_memory() {
+    if command -v nvidia-smi &>/dev/null; then
+        local mem_mb
+        mem_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)
+        echo $((mem_mb / 1024))
+    else
+        echo 0
+    fi
+}
+
+# Detect system memory
+detect_system_memory() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        free -g | awk '/^Mem:/{print $2}'
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        sysctl -n hw.memsize 2>/dev/null | awk '{print int($1/1024/1024/1024)}'
+    else
+        echo 0
+    fi
+}
+
+# Determine hardware profile based on GPU memory
+detect_hardware_profile() {
+    GPU_MEMORY_GB=$(detect_gpu_memory)
+    SYSTEM_MEMORY_GB=$(detect_system_memory)
+
+    if [ "$GPU_MEMORY_GB" -lt 12 ]; then
+        HARDWARE_PROFILE="LOW"
+    elif [ "$GPU_MEMORY_GB" -lt 24 ]; then
+        HARDWARE_PROFILE="MEDIUM"
+    else
+        HARDWARE_PROFILE="HIGH"
+    fi
+}
 
 # --- Utility Functions -------------------------------------------------------
 
@@ -211,10 +283,17 @@ ask_litellm_option() {
 
 # Show model selection menu with file status and sizes
 show_model_menu() {
-    local container_status litellm_status status_line
+    local container_status litellm_status status_line hardware_info
     container_status=$(get_container_status)
     litellm_status=$(get_litellm_status)
     status_line="SGLang: $container_status  │  liteLLM: $litellm_status"
+
+    # Hardware profile display
+    case "$HARDWARE_PROFILE" in
+        LOW)  hardware_info="🔴 LOW (< 12GB VRAM)" ;;
+        MEDIUM) hardware_info="🟡 MEDIUM (12-24GB VRAM)" ;;
+        HIGH) hardware_info="🟢 HIGH (> 24GB VRAM)" ;;
+    esac
 
     # Build menu items array
     local menu_items=()
@@ -241,9 +320,9 @@ show_model_menu() {
     # Show whiptail menu
     local choice
     choice=$(whiptail \
-        --title "🚀 SGLang Model Launcher (Grace Blackwell Optimized)" \
-        --menu "Status: $status_line\n\nSelect a model to launch:\n[✓] Cache exists  [✗] Missing (Will download)" \
-        30 100 7 \
+        --title "🚀 SGLang Model Launcher (Auto-Optimized)" \
+        --menu "Status: $status_line │ Hardware: $hardware_info | GPU: ${GPU_MEMORY_GB}GB\n\nSelect a model to launch:\n[✓] Cache exists  [✗] Missing (Will download)" \
+        32 105 7 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 
@@ -311,19 +390,36 @@ stop_existing_container() {
     fi
 }
 
-# Launch the selected model with Grace Blackwell optimization
+# Launch the selected model with hardware-aware optimization
 launch_model() {
     local choice="$1"
     local idx=$((choice - 1))
     local model_id="${MODEL_IDS[$idx]}"
-    local extra_args="${MODEL_EXTRA_ARGS[$idx]}"
+    local extra_args
+    extra_args=$(get_model_args "$idx")
 
-    # Grace Blackwell specific optimizations: 128GB LPDDRX, 2x Superchip, ConnectX7
+    # Adjust resource allocation based on hardware profile
+    local shm_size memory_limit
+    case "$HARDWARE_PROFILE" in
+        LOW)
+            shm_size="8g"
+            memory_limit="10g"
+            ;;
+        MEDIUM)
+            shm_size="16g"
+            memory_limit="20g"
+            ;;
+        HIGH)
+            shm_size="120g"
+            memory_limit="124g"
+            ;;
+    esac
+
     docker run -d --name "$CONTAINER_NAME" \
         --gpus all \
         --ipc=host \
-        --shm-size 120g \
-        --memory 124g \
+        --shm-size "$shm_size" \
+        --memory "$memory_limit" \
         --ulimit memlock=-1:-1 \
         --ulimit stack=67108864 \
         --cap-add IPC_LOCK \
@@ -345,7 +441,7 @@ launch_model() {
         $extra_args \
         2>/dev/null || {
         whiptail --title "❌ Docker Error" \
-            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled on Grace Blackwell\n- Sufficient disk space in HF cache (~30GB for large models)" \
+            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled\n- Sufficient disk space in HF cache (~30GB for large models)\n- VRAM available ($GPU_MEMORY_GB GB) matches model requirements" \
             14 75
         return 1
     }
@@ -389,6 +485,9 @@ wait_for_sglang() {
 main() {
     check_prerequisites
 
+    # Detect hardware profile first
+    detect_hardware_profile
+
     # Ensure HF Cache dir exists
     mkdir -p "$HF_CACHE_DIR"
 
@@ -398,11 +497,11 @@ main() {
     # If argument is provided, skip whiptail menu (non-interactive mode)
     if [ $# -gt 0 ]; then
         choice="$1"
-        if ! [[ "$choice" =~ ^[1-6]$ ]]; then
-            echo "Error: Invalid model choice '$choice'. Must be 1-6."
+        if ! [[ "$choice" =~ ^[1-7]$ ]]; then
+            echo "Error: Invalid model choice '$choice'. Must be 1-7."
             exit 1
         fi
-        
+
         # Pre-flight check passed
         stop_existing_container
 

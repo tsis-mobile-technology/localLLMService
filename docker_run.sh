@@ -2,11 +2,10 @@
 set -euo pipefail
 
 # ============================================================================
-# LLaMA.cpp Interactive Docker Model Launcher
+# LLaMA.cpp Interactive Docker Model Launcher (Multi-Hardware Support)
 # ============================================================================
-# Provides a whiptail TUI for selecting and launching different LLM models
-# with docker-compose. Supports model file validation, container status
-# checking, and automatic log tailing.
+# Auto-detects hardware profile (LOW/MEDIUM/HIGH) and optimizes parameters.
+# Supports: < 12GB (Gemma 4 E4B), 12-24GB (Gemma 4 31B), > 24GB (Qwen 35B A3B)
 # ============================================================================
 
 # --- Constants ---------------------------------------------------------------
@@ -14,6 +13,11 @@ readonly MODELS_DIR="$HOME/Programming/models"
 readonly CONTAINER_NAME="llama-server"
 readonly DOCKER_IMAGE="ghcr.io/ggml-org/llama.cpp:server-cuda"
 readonly PORT=8080
+
+# Hardware profile detection (will be set by detect_hardware_profile)
+HARDWARE_PROFILE=""
+GPU_MEMORY_GB=0
+SYSTEM_MEMORY_GB=0
 
 # liteLLM Integration (optional proxy layer for caching/logging/UI)
 readonly LITELLM_CONTAINER="litellm-proxy"
@@ -54,17 +58,85 @@ readonly MODEL_DESCS=(
     "Q4_0  │ 256K ctx │ MoE GPU       │ 35B MoE Advanced"
 )
 
-# Grace Blackwell optimization: Full GPU support, large context, high precision
-# 128GB LPDDRX allows full model loading for larger models
-readonly MODEL_EXTRA_ARGS=(
-    "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192"
-    "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192"
-    "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192"
-    "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192"
-    "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384"
-    "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384"
-    "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384"
-)
+# Model-specific arguments optimized per hardware profile
+# Format: get_model_args <model_index> returns appropriate args for current HARDWARE_PROFILE
+get_model_args() {
+    local model_idx=$1
+
+    case "$HARDWARE_PROFILE" in
+        LOW)  # < 12GB VRAM: Minimal layers, small context, CPU offload
+            case $model_idx in
+                0)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 16384 -n 512" ;;
+                1)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 16384 -n 512" ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
+                3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
+                4)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
+                5)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
+                6)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
+            esac
+            ;;
+        MEDIUM)  # 12-24GB VRAM: Balanced layers, moderate context
+            case $model_idx in
+                0)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 65536 -n 4096" ;;
+                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 65536 -n 4096" ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 4096" ;;
+                3)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 65536 -n 4096" ;;
+                4)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
+                5)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
+                6)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
+            esac
+            ;;
+        HIGH)  # > 24GB VRAM (Grace Blackwell): Full layers, large context, high precision
+            case $model_idx in
+                0)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192" ;;
+                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192" ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192" ;;
+                3)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192" ;;
+                4)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
+                5)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
+                6)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
+            esac
+            ;;
+    esac
+}
+
+# --- Hardware Detection Functions -------------------------------------------
+
+# Detect available GPU memory
+detect_gpu_memory() {
+    if command -v nvidia-smi &>/dev/null; then
+        local mem_mb
+        mem_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)
+        echo $((mem_mb / 1024))
+    else
+        echo 0
+    fi
+}
+
+# Detect system memory
+detect_system_memory() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        free -g | awk '/^Mem:/{print $2}'
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        sysctl -n hw.memsize 2>/dev/null | awk '{print int($1/1024/1024/1024)}'
+    else
+        echo 0
+    fi
+}
+
+# Determine hardware profile based on GPU memory
+detect_hardware_profile() {
+    GPU_MEMORY_GB=$(detect_gpu_memory)
+    SYSTEM_MEMORY_GB=$(detect_system_memory)
+
+    if [ "$GPU_MEMORY_GB" -lt 12 ]; then
+        HARDWARE_PROFILE="LOW"
+    elif [ "$GPU_MEMORY_GB" -lt 24 ]; then
+        HARDWARE_PROFILE="MEDIUM"
+    else
+        HARDWARE_PROFILE="HIGH"
+    fi
+}
 
 # --- Utility Functions -------------------------------------------------------
 
@@ -192,10 +264,17 @@ ask_litellm_option() {
 
 # Show model selection menu with file status and sizes
 show_model_menu() {
-    local container_status litellm_status status_line
+    local container_status litellm_status status_line hardware_info
     container_status=$(get_container_status)
     litellm_status=$(get_litellm_status)
     status_line="llama.cpp: $container_status  │  liteLLM: $litellm_status"
+
+    # Hardware profile display
+    case "$HARDWARE_PROFILE" in
+        LOW)  hardware_info="🔴 LOW (< 12GB VRAM)" ;;
+        MEDIUM) hardware_info="🟡 MEDIUM (12-24GB VRAM)" ;;
+        HIGH) hardware_info="🟢 HIGH (> 24GB VRAM)" ;;
+    esac
 
     # Build menu items array
     local menu_items=()
@@ -222,9 +301,9 @@ show_model_menu() {
     # Show whiptail menu
     local choice
     choice=$(whiptail \
-        --title "🦙 LLaMA.cpp Model Launcher (Grace Blackwell Optimized)" \
-        --menu "Status: $status_line\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
-        28 95 7 \
+        --title "🦙 LLaMA.cpp Model Launcher (Auto-Optimized)" \
+        --menu "Status: $status_line │ Hardware: $hardware_info | GPU: ${GPU_MEMORY_GB}GB\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
+        30 100 7 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 
@@ -296,23 +375,42 @@ stop_existing_container() {
     fi
 }
 
-# Launch the selected model with Grace Blackwell optimization
+# Launch the selected model with hardware-aware optimization
 launch_model() {
     local choice="$1"
     local idx=$((choice - 1))
     local model_file="${MODEL_FILES[$idx]}"
-    local extra_args="${MODEL_EXTRA_ARGS[$idx]}"
+    local extra_args
+    extra_args=$(get_model_args "$idx")
 
-    # Grace Blackwell specific optimizations
-    # 128GB LPDDRX, Dual Superchip support, ConnectX7 fabric awareness
+    # Adjust resource allocation based on hardware profile
+    local shm_size memory_limit threads
+    case "$HARDWARE_PROFILE" in
+        LOW)
+            shm_size="8g"
+            memory_limit="10g"
+            threads="4"
+            ;;
+        MEDIUM)
+            shm_size="16g"
+            memory_limit="20g"
+            threads="8"
+            ;;
+        HIGH)
+            shm_size="100g"
+            memory_limit="124g"
+            threads="32"
+            ;;
+    esac
+
     docker run -d --name "$CONTAINER_NAME" \
         --gpus all \
         --cap-add IPC_LOCK \
         --cap-add SYS_ADMIN \
         --ulimit memlock=-1:-1 \
         --ulimit stack=67108864 \
-        --shm-size 100g \
-        --memory 124g \
+        --shm-size "$shm_size" \
+        --memory "$memory_limit" \
         -p ${PORT}:8080 \
         -v "${MODELS_DIR}:/models" \
         -e CUDA_VISIBLE_DEVICES=0,1 \
@@ -320,12 +418,12 @@ launch_model() {
         -e NVIDIA_DISABLE_MPS=0 \
         "$DOCKER_IMAGE" \
         -m "/models/${model_file}" \
-        --threads-per-core 4 \
-        --threads 32 \
+        --threads-per-core 2 \
+        --threads "$threads" \
         $extra_args \
         2>/dev/null || {
         whiptail --title "❌ Docker Error" \
-            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled on Grace Blackwell" \
+            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled\n- Sufficient VRAM for selected model ($GPU_MEMORY_GB GB available)" \
             14 75
         return 1
     }
@@ -336,6 +434,9 @@ launch_model() {
 main() {
     check_whiptail
     check_prerequisites
+
+    # Detect hardware profile first
+    detect_hardware_profile
 
     # Loop to handle file-not-found case
     while true; do
