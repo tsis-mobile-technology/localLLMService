@@ -1,7 +1,7 @@
 services:
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
-    container_name: litellm
+    container_name: litellm-glm-proxy
     restart: unless-stopped
     pull_policy: never
     ports:
@@ -13,15 +13,23 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - LITELLM_LOG_LEVEL=INFO
       - TZ=Asia/Seoul
     depends_on:
       - postgres
+      - vllm-glm
     command: >
       --config /app/config.yaml
       --port 4000
       --debug
     networks:
       - t-ai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   postgres:
     image: postgres:16
@@ -39,6 +47,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - t-ai-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:

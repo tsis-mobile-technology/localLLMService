@@ -1,36 +1,41 @@
 services:
-  vllm-gemma:
+  vllm-glm:
     image: vllm/vllm-openai:latest
     platform: linux/amd64
     pull_policy: never
-    container_name: vllm-gemma4
+    container_name: vllm-glm-5.2
     ipc: host
-    shm_size: 32g
+    shm_size: 120g
+    mem_limit: 124g
     ports:
       - "8000:8000"
     environment:
       - NVIDIA_VISIBLE_DEVICES=0,1
       - HF_HOME=/root/.cache/huggingface
-      - HF_HUB_OFFLINE=1
+      - HF_HUB_OFFLINE=0
       - VLLM_USE_V1=1
+      - VLLM_LOGGING_LEVEL=INFO
+      - CUDA_VISIBLE_DEVICES=0,1
+      - NVIDIA_TF32=1
+      - NVIDIA_DISABLE_MPS=0
       - TZ=Asia/Seoul
     volumes:
-      - ./models/models--google--gemma-4-31B-it:/root/.cache/huggingface/hub/models--google--gemma-4-31B-it
       - ./hf_cache:/root/.cache/huggingface
+      - ./models:/root/models
     command: >
-      --model google/gemma-4-31B-it
+      --model unsloth/GLM-5.2
       --tensor-parallel-size 2
-      --gpu-memory-utilization 0.88
-      --max-model-len 131072
-      --max-num-seqs 16
+      --gpu-memory-utilization 0.90
+      --max-model-len 262144
+      --max-num-seqs 32
       --max-num-batched-tokens 16384
-      --enable-auto-tool-choice
-      --tool-call-parser gemma4
-      --reasoning-parser gemma4
+      --dtype bfloat16
       --kv-cache-dtype fp8
+      --enable-prefix-caching
+      --enable-chunked-prefill
+      --trust-remote-code
       --host 0.0.0.0
       --port 8000
-      --trust-remote-code
     deploy:
       resources:
         reservations:
