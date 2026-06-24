@@ -7,6 +7,11 @@
 BASE_URL="http://172.25.110.204:8000/v1"
 API_KEY="sk-"
 MODEL="google/gemma-4-31B-it"
+#BASE_URL="http://localhost:4000/v1"
+#API_KEY="sk-drPtCcb3695mAXc_5_SRlg"
+#API_KEY="sk-local-master"
+#MODEL="gpt-4o"
+# "gemma-4-31b"
 
 echo "=================================================="
 echo "🚀 Testing API Endpoint"
