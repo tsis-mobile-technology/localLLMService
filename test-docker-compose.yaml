@@ -1,0 +1,26 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: litellm
+    restart: unless-stopped
+    pull_policy: never
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./company_test/litellm/config.yaml:/app/config.yaml:ro
+      - ./company_test/litellm/litellm_data:/app/data
+    env_file:
+      - .env
+    command: >
+      --config /app/config.yaml
+      --port 4000
+      --debug
+    networks:
+      - t-ai-network
+
+volumes:
+  litellm_data:
+
+networks:
+  t-ai-network:
+    external: true

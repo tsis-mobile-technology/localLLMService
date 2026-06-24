@@ -1,0 +1,34 @@
+  754  vi docker-compose.gemma.yaml
+  757  vi docker-compose.yaml
+  780  cd docker\ installers/
+  789  ps -ef | docker
+  790  ps -ef | grep docker
+  798  cat docker-compose.yaml
+  799  docker ps
+  801  docker compose ps
+  803  vi docker-compose.yaml
+  804  history | grep docker | grep load
+  805  docker load -i postgres-16.tar.gz
+  807  docker compose up -d
+  808  history | grep docker
+  809  docker load -i litellm-main-stable.tar.gz
+  810  docker compose up -d
+  811  docker image ls
+  813  docker load -i postgres-16.tar.gz
+  814  docker image ls
+  815  docker ps
+  816  docker compose image ls
+  817  docker compose images ls
+  818  docker images ls
+  819  docker images
+  821  cd /var/lib/docker/rootfs/overlayfs/078fcd3fa0e6fe5a15a1dd6019697a12dfbf0e1524f44016407803c35e16d3ca
+  825  cd /var/lib/docker/rootfs/overlayfs/078fcd3fa0e6fe5a15a1dd6019697a12dfbf0e1524f44016407803c35e16d3ca
+  838  docker ps
+  839  docker logs -f vllm-gemma4
+  841  docker logs -f vllm-gemma4
+  842  history | grep docker
+  846  vi /etc/docker/daemon.json
+  847  docker image ls
+  852  cat docker-compose.yaml
+  856  vi docker-compose.yaml
+  866  history | grep docker

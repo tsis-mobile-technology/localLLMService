@@ -13,19 +13,21 @@ services:
       - HF_HOME=/root/.cache/huggingface
       - HF_HUB_OFFLINE=1
       - VLLM_USE_V1=1
+      - TZ=Asia/Seoul
     volumes:
       - ./models/models--google--gemma-4-31B-it:/root/.cache/huggingface/hub/models--google--gemma-4-31B-it
       - ./hf_cache:/root/.cache/huggingface
     command: >
       --model google/gemma-4-31B-it
       --tensor-parallel-size 2
-      --gpu-memory-utilization 0.92
+      --gpu-memory-utilization 0.88
       --max-model-len 131072
-      --max-num-seqs 32
-      --max-num-batched-tokens 8192
+      --max-num-seqs 16
+      --max-num-batched-tokens 16384
       --enable-auto-tool-choice
       --tool-call-parser gemma4
       --reasoning-parser gemma4
+      --kv-cache-dtype fp8
       --host 0.0.0.0
       --port 8000
       --trust-remote-code

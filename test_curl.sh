@@ -1,9 +1,12 @@
 #!/bin/bash
 
 # Configuration
-BASE_URL="http://172.25.110.204:4000/v1"
-API_KEY="sk-drPtCcb3695mAXc_5_SRlg"
-MODEL="gemma-4-31b"
+#BASE_URL="http://172.25.110.204:4000/v1"
+#API_KEY="sk-drPtCcb3695mAXc_5_SRlg"
+#MODEL="gemma-4-31b"
+BASE_URL="http://172.25.110.204:8000/v1"
+API_KEY="sk-"
+MODEL="google/gemma-4-31B-it"
 
 echo "=================================================="
 echo "🚀 Testing API Endpoint"
@@ -22,7 +25,7 @@ RESPONSE_DATA=$(curl -s -w "\n%{http_code}" --location "$BASE_URL/chat/completio
     \"messages\": [
       {
         \"role\": \"user\",
-        \"content\": \"Hello, what is your name and location?\"
+        \"content\": \"안녕, 오늘 날짜를 유추해서 시를 작성해..\"
       }
     ]
   }")

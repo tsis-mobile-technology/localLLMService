@@ -23,6 +23,9 @@ __pycache__/
 .DS_Store
 .env
 .env.local
+*.tar
+*.gz
+*.zip
 
 # Generated config
 litellm_config.yaml
