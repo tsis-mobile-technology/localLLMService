@@ -18,6 +18,9 @@ readonly PORT=8080
 HARDWARE_PROFILE=""
 GPU_MEMORY_GB=0
 SYSTEM_MEMORY_GB=0
+GPU_COUNT=0          # Number of CUDA devices detected on this system
+CUDA_DEVICES=""      # Comma-separated device list (e.g. "0" or "0,1,2,3")
+GPU_TOTAL_MEMORY_GB=0 # Aggregate VRAM across all detected GPUs (e.g. 2x 96GB = 192GB)
 
 # liteLLM Integration (optional proxy layer for caching/logging/UI)
 readonly LITELLM_CONTAINER="litellm-proxy"
@@ -68,16 +71,19 @@ get_model_args() {
     local model_idx=$1
 
     case "$HARDWARE_PROFILE" in
-        LOW)  # < 12GB VRAM: Minimal layers, small context, CPU offload
+        LOW)  # ≤ 12GB VRAM: q4_0 KV cache keeps context cheap; IDE-friendly sizes
+            # NOTE: contexts raised to handle IDE/agent workloads (VS Code, Copilot, etc.)
+            # which routinely send 40K+ token prompts. With q4_0 cache (and Gemma SWA),
+            # KV growth is small — e.g. E4B Q8 @ 131072 measured ~7GB on a 12GB GPU.
             case $model_idx in
-                0)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 512 --chunk-size 512" ;;
-                1)  echo "--n-cpu-layers 100 --no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 16384 -n 256" ;;
-                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 512" ;;
-                3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
-                4)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
-                5)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
-                6)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
-                7)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
+                0)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 1024" ;;
+                1)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 1024" ;;
+                3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 1024" ;;
+                4)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 1024" ;;
+                5)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
+                6)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
+                7)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
             esac
             ;;
         MEDIUM)  # 12-24GB VRAM: Balanced layers, moderate context
@@ -109,14 +115,59 @@ get_model_args() {
 
 # --- Hardware Detection Functions -------------------------------------------
 
-# Detect available GPU memory
+# Detect available GPU memory (per-GPU total, GB) of the first device
 detect_gpu_memory() {
     if command -v nvidia-smi &>/dev/null; then
         local mem_mb
-        mem_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)
-        echo $((mem_mb / 1024))
+        mem_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)
+        # Guard against empty/non-numeric output (e.g. driver not ready)
+        if [[ "$mem_mb" =~ ^[0-9]+$ ]]; then
+            echo $((mem_mb / 1024))
+        else
+            echo 0
+        fi
     else
         echo 0
+    fi
+}
+
+# Detect aggregate GPU memory (GB) summed across all CUDA devices.
+# With layer-split tensor parallelism the model is shared across GPUs,
+# so combined VRAM is what determines how large a model/context can run.
+detect_total_gpu_memory() {
+    if command -v nvidia-smi &>/dev/null; then
+        local total_mb
+        total_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
+            | awk 'BEGIN{s=0} /^[0-9]+$/{s+=$1} END{print s}')
+        if [[ "$total_mb" =~ ^[0-9]+$ ]] && [ "$total_mb" -gt 0 ]; then
+            echo $((total_mb / 1024))
+        else
+            echo 0
+        fi
+    else
+        echo 0
+    fi
+}
+
+# Detect the number of CUDA-capable GPUs present on this system
+detect_gpu_count() {
+    if command -v nvidia-smi &>/dev/null; then
+        local count
+        count=$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null | grep -c '^[0-9]')
+        echo "${count:-0}"
+    else
+        echo 0
+    fi
+}
+
+# Build a comma-separated CUDA device list for the detected GPU count
+# e.g. 1 GPU -> "0", 2 GPUs -> "0,1", 4 GPUs -> "0,1,2,3"
+build_cuda_devices() {
+    local n=$1
+    if [ "$n" -le 0 ]; then
+        echo ""
+    else
+        seq -s, 0 $((n - 1))
     fi
 }
 
@@ -133,12 +184,18 @@ detect_system_memory() {
 
 # Determine hardware profile based on GPU memory
 detect_hardware_profile() {
-    GPU_MEMORY_GB=$(detect_gpu_memory)
+    GPU_MEMORY_GB=$(detect_gpu_memory)              # per-GPU VRAM (display)
+    GPU_TOTAL_MEMORY_GB=$(detect_total_gpu_memory)  # aggregate VRAM (profile decision)
     SYSTEM_MEMORY_GB=$(detect_system_memory)
+    GPU_COUNT=$(detect_gpu_count)
+    CUDA_DEVICES=$(build_cuda_devices "$GPU_COUNT")
 
-    if [ "$GPU_MEMORY_GB" -lt 12 ]; then
+    # Profile is decided by total VRAM across all GPUs, since layer-split
+    # tensor parallelism pools memory (e.g. 2x 96GB = 192GB -> HIGH).
+    # Thresholds: <=12GB LOW, 13-23GB MEDIUM, >=24GB HIGH.
+    if [ "$GPU_TOTAL_MEMORY_GB" -le 12 ]; then
         HARDWARE_PROFILE="LOW"
-    elif [ "$GPU_MEMORY_GB" -lt 24 ]; then
+    elif [ "$GPU_TOTAL_MEMORY_GB" -lt 24 ]; then
         HARDWARE_PROFILE="MEDIUM"
     else
         HARDWARE_PROFILE="HIGH"
@@ -278,9 +335,9 @@ show_model_menu() {
 
     # Hardware profile display
     case "$HARDWARE_PROFILE" in
-        LOW)  hardware_info="🔴 LOW (< 12GB VRAM)" ;;
-        MEDIUM) hardware_info="🟡 MEDIUM (12-24GB VRAM)" ;;
-        HIGH) hardware_info="🟢 HIGH (> 24GB VRAM)" ;;
+        LOW)  hardware_info="🔴 LOW (≤ 12GB VRAM)" ;;
+        MEDIUM) hardware_info="🟡 MEDIUM (13-23GB VRAM)" ;;
+        HIGH) hardware_info="🟢 HIGH (≥ 24GB VRAM)" ;;
     esac
 
     # Build menu items array
@@ -309,7 +366,7 @@ show_model_menu() {
     local choice
     choice=$(whiptail \
         --title "🦙 LLaMA.cpp Model Launcher (Auto-Optimized)" \
-        --menu "Status: $status_line │ Hardware: $hardware_info | GPU: ${GPU_MEMORY_GB}GB\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
+        --menu "Status: $status_line │ Hardware: $hardware_info | GPU: ${GPU_COUNT}x ${GPU_MEMORY_GB}GB = ${GPU_TOTAL_MEMORY_GB}GB total (devices: ${CUDA_DEVICES:-CPU-only})\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
         32 105 8 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
@@ -410,8 +467,26 @@ launch_model() {
             ;;
     esac
 
+    # Build GPU-related docker flags based on the actual GPUs detected.
+    # - 0 GPUs  : CPU-only, no --gpus / CUDA_VISIBLE_DEVICES
+    # - 1 GPU   : CUDA_VISIBLE_DEVICES=0
+    # - N GPUs  : CUDA_VISIBLE_DEVICES=0,1,...,N-1 (llama.cpp splits layers across them)
+    local gpu_args=()
+    if [ "$GPU_COUNT" -ge 1 ]; then
+        gpu_args+=(--gpus all)
+        gpu_args+=(-e "CUDA_VISIBLE_DEVICES=${CUDA_DEVICES}")
+        gpu_args+=(-e "NVIDIA_TF32=1")
+        gpu_args+=(-e "NVIDIA_DISABLE_MPS=0")
+    fi
+
+    # Enable layer-split tensor parallelism only when more than one GPU is present.
+    local split_args=()
+    if [ "$GPU_COUNT" -gt 1 ]; then
+        split_args+=(--split-mode layer)
+    fi
+
     docker run -d --name "$CONTAINER_NAME" \
-        --gpus all \
+        ${gpu_args[@]+"${gpu_args[@]}"} \
         --cap-add IPC_LOCK \
         --cap-add SYS_ADMIN \
         --ulimit memlock=-1:-1 \
@@ -420,17 +495,16 @@ launch_model() {
         --memory "$memory_limit" \
         -p ${PORT}:8080 \
         -v "${MODELS_DIR}:/models" \
-        -e CUDA_VISIBLE_DEVICES=0,1 \
-        -e NVIDIA_TF32=1 \
-        -e NVIDIA_DISABLE_MPS=0 \
         "$DOCKER_IMAGE" \
         -m "/models/${model_file}" \
-        --threads-per-core 2 \
+        --host 0.0.0.0 \
         --threads "$threads" \
+        --parallel 1 \
+        ${split_args[@]+"${split_args[@]}"} \
         $extra_args \
         2>/dev/null || {
         whiptail --title "❌ Docker Error" \
-            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled\n- Sufficient VRAM for selected model ($GPU_MEMORY_GB GB available)" \
+            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled\n- Detected GPUs: $GPU_COUNT (devices: ${CUDA_DEVICES:-CPU-only})\n- Sufficient VRAM for selected model (${GPU_MEMORY_GB}GB per GPU, ${GPU_TOTAL_MEMORY_GB}GB total)" \
             14 75
         return 1
     }
