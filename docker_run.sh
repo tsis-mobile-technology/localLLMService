@@ -28,9 +28,11 @@ readonly LITELLM_MASTER_KEY="sk-local-master"
 
 # --- Model Definitions (parallel arrays) -----------------------------------
 # Optimized for NVIDIA GB10 Grace Blackwell: 128GB LPDDRX, 2x Superchips, ConnectX7
+# GLM-5.2-GGUF from unsloth: https://huggingface.co/unsloth/GLM-5.2-GGUF
 readonly MODEL_NAMES=(
-    "GLM-5.2 BF16 (Recommended for GB10)"
-    "GLM-5.2 FP8"
+    "GLM-5.2 Q8_0 (Recommended)"
+    "GLM-5.2 BF16 (GB10 High)"
+    "GLM-5.2 IQ3_XXS (LOW VRAM)"
     "Gemma 4 E4B Q4"
     "Gemma 4 E4B Q8"
     "Gemma 4 31B"
@@ -39,8 +41,9 @@ readonly MODEL_NAMES=(
 )
 
 readonly MODEL_FILES=(
-    "GLM-5.2-it-BF16.gguf"
-    "GLM-5.2-it-FP8.gguf"
+    "GLM-5.2-UD-Q8_0-00001-of-00017.gguf"
+    "GLM-5.2-BF16-00001-of-00033.gguf"
+    "GLM-5.2-UD-IQ3_XXS-00001-of-00007.gguf"
     "google_gemma-4-E4B-it-Q4_K_M.gguf"
     "google_gemma-4-E4B-it-Q8_0.gguf"
     "google_gemma-4-31B-it-Q4_K_M.gguf"
@@ -49,8 +52,9 @@ readonly MODEL_FILES=(
 )
 
 readonly MODEL_DESCS=(
-    "BF16  │ 128K ctx │ Full Precision │ 5.2B Fast"
-    "FP8   │ 128K ctx │ Quantized     │ 5.2B Faster"
+    "Q8_0  │ 1M ctx │ 8-bit Quant   │ 5.2B Balanced (17 files)"
+    "BF16  │ 1M ctx │ Full Precision │ 5.2B Quality (33 files)"
+    "IQ3_XXS │ 1M ctx │ Ultra Compact │ 5.2B Tiny (7 files)"
     "Q4_K_M  │ 131K ctx │ Full GPU    │ 4B"
     "Q8_0  │ 131K ctx │ Full GPU      │ 4B Premium"
     "Q4_K_M │ 256K ctx │ Full GPU      │ 31B High Performance"
@@ -66,35 +70,38 @@ get_model_args() {
     case "$HARDWARE_PROFILE" in
         LOW)  # < 12GB VRAM: Minimal layers, small context, CPU offload
             case $model_idx in
-                0)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 16384 -n 512" ;;
-                1)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 16384 -n 512" ;;
-                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
+                0)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 512 --chunk-size 512" ;;
+                1)  echo "--n-cpu-layers 100 --no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 16384 -n 256" ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 512" ;;
                 3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
-                4)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
+                4)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 32768 -n 1024" ;;
                 5)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
                 6)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
+                7)  echo "--n-gpu-layers 8 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0 --n-cpu-moe 20 -n 512" ;;
             esac
             ;;
         MEDIUM)  # 12-24GB VRAM: Balanced layers, moderate context
             case $model_idx in
-                0)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 65536 -n 4096" ;;
-                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 65536 -n 4096" ;;
-                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 4096" ;;
-                3)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 65536 -n 4096" ;;
-                4)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
+                0)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 4096" ;;
+                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 65536 -n 2048" ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 1024" ;;
+                3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 4096" ;;
+                4)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 65536 -n 4096" ;;
                 5)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
                 6)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
+                7)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
             esac
             ;;
         HIGH)  # > 24GB VRAM (Grace Blackwell): Full layers, large context, high precision
             case $model_idx in
-                0)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192" ;;
-                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 131072 -n 8192" ;;
-                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192" ;;
-                3)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192" ;;
-                4)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
+                0)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 262144 -n 8192" ;;
+                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 262144 -n 8192" ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 262144 -n 4096" ;;
+                3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192" ;;
+                4)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192" ;;
                 5)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
                 6)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
+                7)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
             esac
             ;;
     esac
@@ -303,7 +310,7 @@ show_model_menu() {
     choice=$(whiptail \
         --title "🦙 LLaMA.cpp Model Launcher (Auto-Optimized)" \
         --menu "Status: $status_line │ Hardware: $hardware_info | GPU: ${GPU_MEMORY_GB}GB\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
-        30 100 7 \
+        32 105 8 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 

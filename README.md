@@ -10,17 +10,19 @@
 - 현재 컨테이너 상태 실시간 표시
 
 ### 🚀 다양한 LLM 모델 지원 (Grace Blackwell 최적화)
-| 모델 | 크기 | 컨텍스트 | 특징 |
-|------|------|---------|------|
-| **GLM-5.2** (권장) | 5.2B | 128K | 빠른 응답, BF16/FP8 지원 |
-| **Gemma 4 E4B** | 4B/8B | 131K | 초경량, 풀 GPU 실행 |
-| **Gemma 4 31B** | 31B | 256K | 고성능, 64 GPU 레이어 |
-| **Gemma 4 26B A4B** | 26B | 256K | MoE 혼합, GPU 최적화 |
-| **Qwen 3.6 35B A3B** | 35B | 256K | MoE 고급, Sparse 처리 |
-| **Gemma 2 9B** | 9B | 8K | Dense 경량 |
-| **Qwen 2.5 7B** | 7B | 131K | Dense 컴팩트 |
 
-**LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**
+| 모델 | 크기 | 컨텍스트 | 특징 | 파일 |
+|------|------|---------|------|------|
+| **GLM-5.2 Q8_0** (권장) | 5.2B | 1M | 8비트 균형 | 17개 |
+| **GLM-5.2 BF16** | 5.2B | 1M | 전체 정밀도 | 33개 |
+| **GLM-5.2 IQ3_XXS** | 5.2B | 1M | 초경량 | 7개 |
+| **Gemma 4 E4B** | 4B/8B | 131K | 초경량, 풀 GPU | 1개 |
+| **Gemma 4 31B** | 31B | 256K | 고성능, 64 GPU | 1개 |
+| **Gemma 4 26B A4B** | 26B | 256K | MoE 혼합, GPU | 1개 |
+| **Qwen 3.6 35B A3B** | 35B | 256K | MoE 고급 | 1개 |
+
+**LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**  
+**GLM-5.2**: https://huggingface.co/unsloth/GLM-5.2-GGUF (unsloth GGUF 버전)
 
 ### 💎 선택적 liteLLM 프록시 레이어
 ```
@@ -92,8 +94,9 @@ chmod +x docker_run.sh docker_stop.sh
 #### LLaMA.cpp 모델 (`.gguf` 형식)
 ```bash
 ~/Programming/models/
-├── GLM-5.2-it-BF16.gguf          # 권장 (빠름)
-├── GLM-5.2-it-FP8.gguf           # 더 빠름
+├── GLM-5.2-UD-Q8_0-00001-of-00017.gguf     # 권장 (균형)
+├── GLM-5.2-BF16-00001-of-00033.gguf        # 고품질 (33 파일)
+├── GLM-5.2-UD-IQ3_XXS-00001-of-00007.gguf  # 초경량 (7 파일)
 ├── google_gemma-4-E4B-it-Q4_K_M.gguf
 ├── google_gemma-4-E4B-it-Q8_0.gguf
 ├── google_gemma-4-31B-it-Q4_K_M.gguf
@@ -107,9 +110,12 @@ chmod +x docker_run.sh docker_stop.sh
 - `google/gemma-4-E4B-it` 등
 
 > 💡 **팁**: 
-> - LLaMA.cpp: [ollama.ai](https://ollama.ai) 또는 [huggingface.co](https://huggingface.co)에서 `.gguf` 형식 다운로드
-> - SGLang: Hugging Face Hub에서 자동 다운로드 (첫 실행 시 ~30GB 소요 가능)
-> - GLM-5.2: https://huggingface.co/zai-org/GLM-5.2
+> - **GLM-5.2 GGUF 모델**: https://huggingface.co/unsloth/GLM-5.2-GGUF (권장)
+>   - 다양한 양자화 옵션 (Q8_0, BF16, IQ3_XXS 등)
+>   - 분할 파일 자동 로드 지원
+> - **LLaMA.cpp**: [ollama.ai](https://ollama.ai) 또는 [huggingface.co](https://huggingface.co)에서 `.gguf` 형식 다운로드
+> - **SGLang**: Hugging Face Hub에서 자동 다운로드 (첫 실행 시 ~30GB 소요 가능)
+> - **GLM-5.2 원본**: https://huggingface.co/zai-org/GLM-5.2
 
 ### 3️⃣ 스크립트 실행
 
