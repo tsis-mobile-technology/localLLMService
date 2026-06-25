@@ -37,9 +37,9 @@ readonly MODEL_NAMES=(
     "GLM-5.2 IQ1_S (Recommended - 256GB Cluster)"
     "GLM-5.2 IQ2_M (128GB Dual-Node - Limited)"
     "GLM-5.2 IQ3_XXS (Single 128GB - Compact)"
+    "Gemma 4 31B (Multi-Instance - Team Collab)"
     "Gemma 4 E4B Q4"
     "Gemma 4 E4B Q8"
-    "Gemma 4 31B"
     "Gemma 4 26B A4B"
     "Qwen 3.6 35B A3B"
 )
@@ -48,9 +48,9 @@ readonly MODEL_FILES=(
     "unsloth/GLM-5.2-GGUF:UD-IQ1_S"
     "unsloth/GLM-5.2-GGUF:UD-IQ2_M"
     "unsloth/GLM-5.2-GGUF:UD-IQ3_XXS"
+    "unsloth/gemma-4-31b-it-GGUF:UD-Q4_K_XL"
     "google_gemma-4-E4B-it-Q4_K_M.gguf"
     "google_gemma-4-E4B-it-Q8_0.gguf"
-    "google_gemma-4-31B-it-Q4_K_M.gguf"
     "google_gemma-4-26B-A4B-it-Q4_K_M.gguf"
     "Qwen_Qwen3.6-35B-A3B-Q4_0.gguf"
 )
@@ -59,10 +59,10 @@ readonly MODEL_DESCS=(
     "IQ1_S (1-bit) │ 256GB cluster │ 223GB mem │ 744B (4 files) - Ultra-Compressed"
     "IQ2_M (2-bit) │ 256GB cluster │ 245GB mem │ 744B (5 files) - High-Quality Compact"
     "IQ3_XXS (3-bit) │ 128GB single │ 110GB mem │ 744B (7 files) - Balanced Compact"
+    "Q4_K_XL │ 45K ctx │ Data Parallelism │ 31B Coding (4x instances + LiteLLM) │ Best for Team"
     "Q4_K_M  │ 131K ctx │ Full GPU    │ 4B"
     "Q8_0  │ 131K ctx │ Full GPU      │ 4B Premium"
-    "Q4_K_M │ 256K ctx │ Full GPU      │ 31B High Performance"
-    "Q4_K_M │ 256K ctx │ MoE GPU       │ 26B MoE Hybrid"
+    "Q4_K_M │ 256K ctx │ Full GPU      │ 26B MoE Hybrid"
     "Q4_0  │ 256K ctx │ MoE GPU       │ 35B MoE Advanced"
 )
 
@@ -99,14 +99,14 @@ get_model_args() {
                 7)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
             esac
             ;;
-        HIGH)  # > 24GB VRAM (Grace Blackwell): 256GB cluster optimized for GLM-5.2
+        HIGH)  # > 24GB VRAM (Grace Blackwell): 256GB cluster optimized for GLM-5.2 & Gemma 4 31B
             case $model_idx in
                 0)  echo "-c 32768 -n 4096 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
                 1)  echo "-c 16384 -n 2048 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
                 2)  echo "-c 65536 -n 4096 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
-                3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192" ;;
-                4)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192" ;;
-                5)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
+                3)  echo "-c 45000 -n 4096 --cb --threads 16 --parallel 4 --temp 0.7 --top-p 0.95 --min-p 0.05" ;;
+                4)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192" ;;
+                5)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192" ;;
                 6)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
                 7)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
             esac
@@ -236,6 +236,7 @@ get_file_size() {
             *"UD-IQ1_S"*) echo "~223GB (HF)" ;;
             *"UD-IQ2_M"*) echo "~245GB (HF)" ;;
             *"UD-IQ3_XXS"*) echo "~110GB (HF)" ;;
+            *"gemma-4-31b"*) echo "~20GB/inst (HF)" ;;
             *) echo "TBD" ;;
         esac
     else
@@ -412,7 +413,15 @@ confirm_launch() {
         return 1
     fi
 
-    # Show confirmation dialog
+    # Special dialog for Gemma 4 31B with multi-instance option
+    if [ "$idx" -eq 3 ]; then
+        whiptail --title "Gemma 4 31B - Mode Selection" \
+            --yesno "Model:  $name\nFile:   $file\nSize:   $size\nSpecs:  $desc\n\nThis model supports DATA PARALLELISM mode.\n\nWould you like to:\n[Yes]  Multi-Instance (4x + LiteLLM) - Best for team\n[No]   Single-Instance - Simple, single user" \
+            18 75
+        return $?
+    fi
+
+    # Standard confirmation dialog for other models
     whiptail --title "Confirm Launch" \
         --yesno "Launch the following model?\n\nModel:  $name\nFile:   $file\nSize:   $size\nSpecs:  $desc\nPort:   http://localhost:$PORT\n\nNote: Any running container will be stopped first." \
         16 75
@@ -436,6 +445,81 @@ show_launch_success() {
         --yesno "Containers launched successfully!\n\nModel:        $name\nllama.cpp:    http://localhost:$PORT${litellm_msg}\n\nWould you like to tail the container logs?\n(Press Ctrl+C to stop)" \
         16 75 \
         --yes-button "Tail Logs" --no-button "Exit"
+}
+
+# --- Multi-Instance Mode (for Gemma 4 31B with LiteLLM) ----------------------
+
+# Launch multiple instances of the same model (Data Parallelism)
+launch_multi_instance() {
+    local choice="$1"
+    local idx=$((choice - 1))
+    local model_file="${MODEL_FILES[$idx]}"
+    local extra_args
+    extra_args=$(get_model_args "$idx")
+
+    # Only Gemma 4 31B supports multi-instance mode
+    if [ "$idx" -ne 3 ]; then
+        whiptail --title "❌ Not Supported" \
+            --msgbox "Multi-Instance mode is only available for:\n\nGemma 4 31B (Model #4)\n\nFor other models, use single-instance mode." \
+            10 60
+        return 1
+    fi
+
+    # Determine instance count based on hardware
+    local instance_count=2  # Default: 2 instances per workstation
+    if whiptail --title "⚙️ Instance Configuration" \
+        --yesno "Multi-Instance Mode Detected!\n\nDefault: 2 instances per workstation\n(4 instances total with 2 workstations)\n\nCurrent setting: $instance_count instances\n\nContinue with default configuration?" \
+        12 70; then
+        :
+    else
+        return 1
+    fi
+
+    # Stop existing containers
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "gemma-31b-" | while read name; do
+        docker stop "$name" 2>/dev/null || true
+        docker rm "$name" 2>/dev/null || true
+    done
+
+    # Launch instances
+    local start_port=8081
+    for i in $(seq 0 $((instance_count - 1))); do
+        local port=$((start_port + i))
+        local instance_name="gemma-31b-instance-$i"
+
+        local shm_size="32g"
+        local memory_limit="40g"
+        local threads="8"
+
+        docker run -d --name "$instance_name" \
+            --gpus all \
+            --cap-add IPC_LOCK \
+            --cap-add SYS_ADMIN \
+            --ulimit memlock=-1:-1 \
+            --ulimit stack=67108864 \
+            --shm-size "$shm_size" \
+            --memory "$memory_limit" \
+            -p ${port}:8080 \
+            -v "${MODELS_DIR}:/models" \
+            -e "LLAMA_CACHE=/models" \
+            "$DOCKER_IMAGE" \
+            -hf "$model_file" \
+            --host 0.0.0.0 \
+            $extra_args \
+            2>/dev/null || {
+            whiptail --title "❌ Docker Error" \
+                --msgbox "Failed to launch instance $i on port $port.\n\nPlease check:\n- Docker is running\n- Port $port is available\n- NVIDIA Container Toolkit installed\n- Sufficient VRAM" \
+                12 70
+            return 1
+        }
+
+        echo "✅ Launched $instance_name on port $port"
+        sleep 1
+    done
+
+    whiptail --title "✅ Multi-Instance Started" \
+        --msgbox "Successfully launched $instance_count instances:\n\n$(for i in $(seq 0 $((instance_count - 1))); do echo "  Instance $i: http://localhost:$((start_port + i))"; done)\n\nNext: Launch LiteLLM to aggregate these instances.\n\nPorts: $start_port-$((start_port + instance_count - 1))" \
+        15 70
 }
 
 # --- Container Management Functions ------------------------------------------
@@ -556,42 +640,65 @@ main() {
         choice=$(show_model_menu) || exit 0  # User pressed Cancel
 
         if confirm_launch "$choice"; then
-            # Ask about liteLLM
-            if ask_litellm_option; then
-                use_litellm=true
+            local idx=$((choice - 1))
+
+            # Check if Gemma 4 31B multi-instance mode
+            if [ "$idx" -eq 3 ]; then
+                # Multi-Instance mode
+                launch_multi_instance "$choice" || continue
+
+                # Always ask about liteLLM for multi-instance
+                if ask_litellm_option; then
+                    use_litellm=true
+                    generate_litellm_config
+                    sleep 2
+                    launch_litellm || true
+                fi
+
+                whiptail --title "✅ Setup Complete" \
+                    --msgbox "Multi-Instance + LiteLLM setup complete!\n\nInstances running on:\n  - Instance 0: http://localhost:8081\n  - Instance 1: http://localhost:8082\n  $([ -n "$1" ] && echo "- Instance 2: http://ws2:8083\n  - Instance 3: http://ws2:8084")\n\nLiteLLM Proxy: http://localhost:4000\n\nUse this for team collaboration!" \
+                    15 70
+
+                exit 0
             else
-                use_litellm=false
+                # Standard single-instance mode
+                # Ask about liteLLM
+                if ask_litellm_option; then
+                    use_litellm=true
+                else
+                    use_litellm=false
+                fi
+
+                # Pre-flight check passed
+                stop_existing_container
+
+                # Generate liteLLM config if needed
+                if [[ "$use_litellm" == "true" ]]; then
+                    generate_litellm_config
+                fi
+
+                # Launch llama.cpp
+                launch_model "$choice" || exit 1
+
+                # Launch liteLLM if requested
+                if [[ "$use_litellm" == "true" ]]; then
+                    sleep 2  # Give llama.cpp time to start
+                    launch_litellm || true  # Non-fatal if liteLLM fails
+                fi
+
+                # Show success and ask about logs
+                if show_launch_success "$choice"; then
+                    # Tail logs with visual separator
+                    echo ""
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Container logs (Ctrl+C to stop tailing):"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo ""
+                    docker logs -f "$CONTAINER_NAME" 2>/dev/null || true
+                fi
+
+                exit 0
             fi
-
-            # Pre-flight check passed
-            stop_existing_container
-
-            # Generate liteLLM config if needed
-            if [[ "$use_litellm" == "true" ]]; then
-                generate_litellm_config
-            fi
-
-            # Launch llama.cpp
-            launch_model "$choice" || exit 1
-
-            # Launch liteLLM if requested
-            if [[ "$use_litellm" == "true" ]]; then
-                sleep 2  # Give llama.cpp time to start
-                launch_litellm || true  # Non-fatal if liteLLM fails
-            fi
-
-            # Show success and ask about logs
-            if show_launch_success "$choice"; then
-                # Tail logs with visual separator
-                echo ""
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "Container logs (Ctrl+C to stop tailing):"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo ""
-                docker logs -f "$CONTAINER_NAME" 2>/dev/null || true
-            fi
-
-            exit 0
         else
             # User selected No in confirmation, show menu again
             continue
