@@ -42,6 +42,7 @@ readonly MODEL_NAMES=(
     "Gemma 4 E4B Q8"
     "Gemma 4 26B A4B"
     "Qwen 3.6 35B A3B"
+    "DeepSeek-Coder-V2 (164K Context)"
 )
 
 readonly MODEL_FILES=(
@@ -53,6 +54,7 @@ readonly MODEL_FILES=(
     "google_gemma-4-E4B-it-Q8_0.gguf"
     "google_gemma-4-26B-A4B-it-Q4_K_M.gguf"
     "Qwen_Qwen3.6-35B-A3B-Q4_0.gguf"
+    "bullerwins/DeepSeek-Coder-V2-Instruct-GGUF:DeepSeek-Coder-V2-Instruct-Q4_K_S"
 )
 
 readonly MODEL_DESCS=(
@@ -64,6 +66,7 @@ readonly MODEL_DESCS=(
     "Q8_0  │ 131K ctx │ Full GPU      │ 4B Premium"
     "Q4_K_M │ 256K ctx │ Full GPU      │ 26B MoE Hybrid"
     "Q4_0  │ 256K ctx │ MoE GPU       │ 35B MoE Advanced"
+    "Q4_K_S │ 164K ctx │ MoE Experts (6/6) │ 236B (21B active) │ Long-Doc Coding"
 )
 
 # Model-specific arguments optimized per hardware profile
@@ -85,9 +88,10 @@ get_model_args() {
                 5)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
                 6)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
                 7)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
+                8)  echo "# ERROR: DeepSeek-Coder-V2 (60-65GB) requires HIGH or MEDIUM+ profile. Use single-node 128GB with IQ3_XXS model instead." ;;
             esac
             ;;
-        MEDIUM)  # 12-24GB VRAM: GLM-5.2 not supported in MEDIUM - use single 128GB node with IQ3_XXS
+        MEDIUM)  # 12-24GB VRAM: GLM-5.2 & DeepSeek-V2 not supported in MEDIUM
             case $model_idx in
                 0)  echo "# ERROR: GLM-5.2 IQ1_S requires 256GB cluster. Use IQ3_XXS or switch to HIGH profile." ;;
                 1)  echo "# ERROR: GLM-5.2 IQ2_M requires 245GB dual-node. Use IQ3_XXS or switch to HIGH profile." ;;
@@ -97,9 +101,10 @@ get_model_args() {
                 5)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
                 6)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
                 7)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
+                8)  echo "# ERROR: DeepSeek-Coder-V2 (60-65GB) requires HIGH profile. Upgrade to 256GB+ cluster." ;;
             esac
             ;;
-        HIGH)  # > 24GB VRAM (Grace Blackwell): 256GB cluster optimized for GLM-5.2 & Gemma 4 31B
+        HIGH)  # > 24GB VRAM (Grace Blackwell): 256GB cluster optimized for GLM-5.2, Gemma 4 31B, & DeepSeek-V2
             case $model_idx in
                 0)  echo "-c 32768 -n 4096 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
                 1)  echo "-c 16384 -n 2048 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
@@ -109,6 +114,7 @@ get_model_args() {
                 5)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192" ;;
                 6)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
                 7)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
+                8)  echo "-c 82000 -n 4096 --cb --threads 16 --parallel 4 --temp 0.7 --top-p 0.95 --min-p 0.05" ;;
             esac
             ;;
     esac
@@ -237,6 +243,7 @@ get_file_size() {
             *"UD-IQ2_M"*) echo "~245GB (HF)" ;;
             *"UD-IQ3_XXS"*) echo "~110GB (HF)" ;;
             *"gemma-4-31b"*) echo "~20GB/inst (HF)" ;;
+            *"DeepSeek-Coder-V2"*) echo "~60-65GB (HF)" ;;
             *) echo "TBD" ;;
         esac
     else
