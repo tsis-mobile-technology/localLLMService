@@ -30,12 +30,13 @@ readonly LITELLM_CONFIG="$MODELS_DIR/litellm_config.yaml"
 readonly LITELLM_MASTER_KEY="sk-local-master"
 
 # --- Model Definitions (parallel arrays) -----------------------------------
-# Optimized for NVIDIA GB10 Grace Blackwell: 128GB LPDDRX, 2x Superchips, ConnectX7
-# GLM-5.2-GGUF from unsloth: https://huggingface.co/unsloth/GLM-5.2-GGUF
+# Optimized for NVIDIA GB10 Grace Blackwell: 2x 128GB LPDDRX, 2x Superchips, ConnectX7 (256GB cluster)
+# GLM-5.2 (744B, 40B active params): https://huggingface.co/unsloth/GLM-5.2-GGUF
+# Quantization: IQ1_S (1-bit, 223GB) for 256GB cluster | IQ2_M (2-bit, 245GB) for dual-node | IQ3_XXS (3-bit, 110GB) for single 128GB
 readonly MODEL_NAMES=(
-    "GLM-5.2 Q8_0 (Recommended)"
-    "GLM-5.2 BF16 (GB10 High)"
-    "GLM-5.2 IQ3_XXS (LOW VRAM)"
+    "GLM-5.2 IQ1_S (Recommended - 256GB Cluster)"
+    "GLM-5.2 IQ2_M (128GB Dual-Node - Limited)"
+    "GLM-5.2 IQ3_XXS (Single 128GB - Compact)"
     "Gemma 4 E4B Q4"
     "Gemma 4 E4B Q8"
     "Gemma 4 31B"
@@ -44,9 +45,9 @@ readonly MODEL_NAMES=(
 )
 
 readonly MODEL_FILES=(
-    "GLM-5.2-UD-Q8_0-00001-of-00017.gguf"
-    "GLM-5.2-BF16-00001-of-00033.gguf"
-    "GLM-5.2-UD-IQ3_XXS-00001-of-00007.gguf"
+    "unsloth/GLM-5.2-GGUF:UD-IQ1_S"
+    "unsloth/GLM-5.2-GGUF:UD-IQ2_M"
+    "unsloth/GLM-5.2-GGUF:UD-IQ3_XXS"
     "google_gemma-4-E4B-it-Q4_K_M.gguf"
     "google_gemma-4-E4B-it-Q8_0.gguf"
     "google_gemma-4-31B-it-Q4_K_M.gguf"
@@ -55,9 +56,9 @@ readonly MODEL_FILES=(
 )
 
 readonly MODEL_DESCS=(
-    "Q8_0  │ 1M ctx │ 8-bit Quant   │ 5.2B Balanced (17 files)"
-    "BF16  │ 1M ctx │ Full Precision │ 5.2B Quality (33 files)"
-    "IQ3_XXS │ 1M ctx │ Ultra Compact │ 5.2B Tiny (7 files)"
+    "IQ1_S (1-bit) │ 256GB cluster │ 223GB mem │ 744B (4 files) - Ultra-Compressed"
+    "IQ2_M (2-bit) │ 256GB cluster │ 245GB mem │ 744B (5 files) - High-Quality Compact"
+    "IQ3_XXS (3-bit) │ 128GB single │ 110GB mem │ 744B (7 files) - Balanced Compact"
     "Q4_K_M  │ 131K ctx │ Full GPU    │ 4B"
     "Q8_0  │ 131K ctx │ Full GPU      │ 4B Premium"
     "Q4_K_M │ 256K ctx │ Full GPU      │ 31B High Performance"
@@ -86,11 +87,11 @@ get_model_args() {
                 7)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
             esac
             ;;
-        MEDIUM)  # 12-24GB VRAM: Balanced layers, moderate context
+        MEDIUM)  # 12-24GB VRAM: GLM-5.2 not supported in MEDIUM - use single 128GB node with IQ3_XXS
             case $model_idx in
-                0)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 4096" ;;
-                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 65536 -n 2048" ;;
-                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 1024" ;;
+                0)  echo "# ERROR: GLM-5.2 IQ1_S requires 256GB cluster. Use IQ3_XXS or switch to HIGH profile." ;;
+                1)  echo "# ERROR: GLM-5.2 IQ2_M requires 245GB dual-node. Use IQ3_XXS or switch to HIGH profile." ;;
+                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 1024 --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
                 3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 65536 -n 4096" ;;
                 4)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 65536 -n 4096" ;;
                 5)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
@@ -98,11 +99,11 @@ get_model_args() {
                 7)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
             esac
             ;;
-        HIGH)  # > 24GB VRAM (Grace Blackwell): Full layers, large context, high precision
+        HIGH)  # > 24GB VRAM (Grace Blackwell): 256GB cluster optimized for GLM-5.2
             case $model_idx in
-                0)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 262144 -n 8192" ;;
-                1)  echo "--no-mmap --cache-type-k f16 --cache-type-v f16 --mlock -c 262144 -n 8192" ;;
-                2)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 262144 -n 4096" ;;
+                0)  echo "-c 32768 -n 4096 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
+                1)  echo "-c 16384 -n 2048 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
+                2)  echo "-c 65536 -n 4096 --cache-type-k q4_0 --cache-type-v q4_0 --mlock --temp 1.0 --top-p 0.95 --min-p 0.01" ;;
                 3)  echo "--no-mmap --cache-type-k q4_0 --cache-type-v q4_0 --mlock -c 131072 -n 8192" ;;
                 4)  echo "--no-mmap --cache-type-k q8_0 --cache-type-v q8_0 --mlock -c 131072 -n 8192" ;;
                 5)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
@@ -226,19 +227,38 @@ get_litellm_status() {
     fi
 }
 
-# Get file size of model or "N/A"
+# Get file size of model or "N/A" or HuggingFace model size
 get_file_size() {
-    local file="$MODELS_DIR/$1"
-    if [ -f "$file" ]; then
-        du -sh "$file" 2>/dev/null | cut -f1
+    local file="$1"
+    if [[ "$file" == *"/"* ]] && [[ "$file" != "/"* ]]; then
+        # HuggingFace hub model - return approximate size based on quantization
+        case "$file" in
+            *"UD-IQ1_S"*) echo "~223GB (HF)" ;;
+            *"UD-IQ2_M"*) echo "~245GB (HF)" ;;
+            *"UD-IQ3_XXS"*) echo "~110GB (HF)" ;;
+            *) echo "TBD" ;;
+        esac
     else
-        echo "N/A"
+        # Local file
+        local full_path="$MODELS_DIR/$file"
+        if [ -f "$full_path" ]; then
+            du -sh "$full_path" 2>/dev/null | cut -f1
+        else
+            echo "N/A"
+        fi
     fi
 }
 
-# Check if model file exists
+# Check if model file exists (or is available on HuggingFace hub)
 file_exists() {
-    [ -f "$MODELS_DIR/$1" ]
+    local file="$1"
+    if [[ "$file" == *"/"* ]] && [[ "$file" != "/"* ]]; then
+        # HuggingFace hub model - assume available
+        return 0
+    else
+        # Local file
+        [ -f "$MODELS_DIR/$file" ]
+    fi
 }
 
 # Check prerequisites (docker availability)
@@ -485,6 +505,16 @@ launch_model() {
         split_args+=(--split-mode layer)
     fi
 
+    # Determine if model is from HuggingFace hub or local file
+    local model_arg
+    if [[ "$model_file" == *"/"* ]] && [[ "$model_file" != "/"* ]]; then
+        # HuggingFace hub format (e.g., unsloth/GLM-5.2-GGUF:UD-IQ1_S)
+        model_arg="-hf $model_file"
+    else
+        # Local file format
+        model_arg="-m /models/$model_file"
+    fi
+
     docker run -d --name "$CONTAINER_NAME" \
         ${gpu_args[@]+"${gpu_args[@]}"} \
         --cap-add IPC_LOCK \
@@ -495,8 +525,9 @@ launch_model() {
         --memory "$memory_limit" \
         -p ${PORT}:8080 \
         -v "${MODELS_DIR}:/models" \
+        -e "LLAMA_CACHE=/models" \
         "$DOCKER_IMAGE" \
-        -m "/models/${model_file}" \
+        $model_arg \
         --host 0.0.0.0 \
         --threads "$threads" \
         --parallel 1 \
