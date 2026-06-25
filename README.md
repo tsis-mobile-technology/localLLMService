@@ -11,18 +11,22 @@
 
 ### 🚀 다양한 LLM 모델 지원 (Grace Blackwell 최적화)
 
-| 모델 | 크기 | 컨텍스트 | 특징 | 파일 |
-|------|------|---------|------|------|
-| **GLM-5.2 Q8_0** (권장) | 5.2B | 1M | 8비트 균형 | 17개 |
-| **GLM-5.2 BF16** | 5.2B | 1M | 전체 정밀도 | 33개 |
-| **GLM-5.2 IQ3_XXS** | 5.2B | 1M | 초경량 | 7개 |
-| **Gemma 4 E4B** | 4B/8B | 131K | 초경량, 풀 GPU | 1개 |
-| **Gemma 4 31B** | 31B | 256K | 고성능, 64 GPU | 1개 |
-| **Gemma 4 26B A4B** | 26B | 256K | MoE 혼합, GPU | 1개 |
-| **Qwen 3.6 35B A3B** | 35B | 256K | MoE 고급 | 1개 |
+| 모델 | 크기 | 양자화 | 메모리 | 컨텍스트 | 특징 | 파일 |
+|------|------|--------|--------|----------|------|------|
+| **GLM-5.2 IQ1_S** (권장) | 744B | 1-bit | 223GB | 256K | 최극 압축, 256GB 클러스터 | 4개 |
+| **GLM-5.2 IQ2_M** | 744B | 2-bit | 245GB | 256K | 고품질 압축, 상세 추론 | 5개 |
+| **GLM-5.2 IQ3_XXS** | 744B | 3-bit | 110GB | 256K | 균형, 단일 128GB | 7개 |
+| **Gemma 4 31B** (Multi-Instance) | 31B | Q4_K_XL | 20GB/인스턴스 | 45K | 데이터 병렬화, 4중 인스턴스 + LiteLLM | 1개 |
+| **Gemma 4 E4B** | 4B/8B | Q4_K_M | 7-8GB | 131K | 초경량, 풀 GPU | 1개 |
+| **Gemma 4 26B A4B** | 26B | Q4_K_M | 16GB | 256K | MoE 혼합, GPU | 1개 |
+| **Qwen 3.6 35B A3B** | 35B | Q4_0 | 19GB | 256K | MoE 고급 | 1개 |
 
-**LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**  
-**GLM-5.2**: https://huggingface.co/unsloth/GLM-5.2-GGUF (unsloth GGUF 버전)
+**LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**
+
+**GLM-5.2** (744B, 40B 활성 파라미터):
+- **HuggingFace**: https://huggingface.co/unsloth/GLM-5.2-GGUF (unsloth GGUF 버전)
+- **양자화 옵션**: IQ1_S (1-bit, 223GB), IQ2_M (2-bit, 245GB), IQ3_XXS (3-bit, 110GB)
+- **256GB 클러스터 환경**: IQ1_S 권장 (메모리 효율적, 33GB 여유)
 
 ### 💎 선택적 liteLLM 프록시 레이어
 ```
@@ -91,18 +95,30 @@ chmod +x docker_run.sh docker_stop.sh
 
 ### 2️⃣ 모델 파일 준비
 
-#### LLaMA.cpp 모델 (`.gguf` 형식)
+#### LLaMA.cpp 모델 (HuggingFace Hub에서 자동 로드)
 ```bash
+# 모델은 스크립트 실행 시 자동으로 HuggingFace에서 다운로드됨
+# 또는 로컬에 사전 다운로드:
+
 ~/Programming/models/
-├── GLM-5.2-UD-Q8_0-00001-of-00017.gguf     # 권장 (균형)
-├── GLM-5.2-BF16-00001-of-00033.gguf        # 고품질 (33 파일)
-├── GLM-5.2-UD-IQ3_XXS-00001-of-00007.gguf  # 초경량 (7 파일)
-├── google_gemma-4-E4B-it-Q4_K_M.gguf
-├── google_gemma-4-E4B-it-Q8_0.gguf
-├── google_gemma-4-31B-it-Q4_K_M.gguf
-├── google_gemma-4-26B-A4B-it-Q4_K_M.gguf
-└── Qwen_Qwen3.6-35B-A3B-Q4_0.gguf
+├── # GLM-5.2 (HuggingFace Hub에서 자동로드)
+│   # unsloth/GLM-5.2-GGUF:UD-IQ1_S (1-bit, 223GB)
+│   # unsloth/GLM-5.2-GGUF:UD-IQ2_M (2-bit, 245GB)
+│   # unsloth/GLM-5.2-GGUF:UD-IQ3_XXS (3-bit, 110GB)
+│
+├── # Gemma 4 (HuggingFace Hub에서 자동로드)
+│   # unsloth/gemma-4-31b-it-GGUF:UD-Q4_K_XL (31B, 20GB)
+│   # google_gemma-4-E4B-it-Q4_K_M.gguf (4B)
+│   # google_gemma-4-E4B-it-Q8_0.gguf (8B)
+│   # google_gemma-4-26B-A4B-it-Q4_K_M.gguf (26B MoE)
+│
+└── # Qwen (로컬 또는 HuggingFace)
+    # Qwen_Qwen3.6-35B-A3B-Q4_0.gguf (35B MoE)
 ```
+
+**LLAMA_CACHE 환경변수**:
+- 첫 실행: HuggingFace에서 모델 다운로드 → `~/Programming/models/` 저장
+- 2회차+: 캐시된 모델 사용 (인터넷 불필요)
 
 #### SGLang 모델 (자동 다운로드)
 - `zai-org/GLM-5.2` (추천)
@@ -127,32 +143,41 @@ chmod +x docker_run.sh docker_stop.sh
 **메뉴 흐름**:
 ```
 1. 모델 선택 메뉴 표시
-   ┌─────────────────────────────────┐
-   │ 🦙 LLaMA.cpp Model Launcher    │
-   │ Status: llama-server: ⚫ NOT    │
-   │                                 │
-   │ [✓] Gemma 4 E4B     (7.5G)    │
-   │ [✓] Gemma 4 31B       (19G)   │
-   │ [✓] Gemma 4 26B A4B   (16G)   │
-   │ [✓] Qwen 3.6 35B A3B  (19G)   │
-   └─────────────────────────────────┘
+   ┌──────────────────────────────────────────┐
+   │ 🦙 LLaMA.cpp Model Launcher              │
+   │ Status: llama.cpp: ⚫ NOT | liteLLM: ⚫  │
+   │ Hardware: 🟢 HIGH (256GB) | GPU: 2x128GB│
+   │                                          │
+   │ [✓] GLM-5.2 IQ1_S (256GB Cluster)      │
+   │ [✓] GLM-5.2 IQ2_M (Dual-Node)          │
+   │ [✓] GLM-5.2 IQ3_XXS (128GB Single)     │
+   │ [✓] Gemma 4 31B (Multi-Instance) 🆕    │
+   │ [✓] Gemma 4 E4B (7.5G)                 │
+   └──────────────────────────────────────────┘
 
 2. 모델 선택
 
-3. 실행 확인
-   Model: Gemma 4 E4B
-   Port:  http://localhost:8080
-   [Yes] [No]
+3. 모드 선택 (Gemma 4 31B의 경우)
+   Model: Gemma 4 31B (Multi-Instance)
+   Mode:  [Yes] Multi-Instance (4x + LiteLLM) ← 권장
+          [No]  Single-Instance
 
-4. liteLLM 프록시 옵션
-   "liteLLM 함께 시작?"
+4. 인스턴스 설정 (Multi-Instance 선택 시)
+   ✅ 2 instances per workstation
+   Ports: 8081, 8082 (WS1) + 8083, 8084 (WS2)
+
+5. liteLLM 프록시 옵션
+   "liteLLM으로 4개 인스턴스 통합?"
    [Start liteLLM] [Skip]
 
-5. 컨테이너 기동
-   - llama.cpp → :8080
-   - liteLLM → :4000 (선택 시)
+6. 컨테이너 기동
+   - Instance A → :8081
+   - Instance B → :8082
+   - Instance C → :8083 (WS2)
+   - Instance D → :8084 (WS2)
+   - liteLLM → :4000 (라운드로빈 분배)
 
-6. 로그 표시 (선택)
+7. 로그 표시 (선택)
    [Tail Logs] [Exit]
 ```
 
@@ -270,7 +295,7 @@ curl http://localhost:4000/v1/chat/completions \
 
 ## 🏗️ 아키텍처 (Grace Blackwell 최적화)
 
-### 아키텍처 다이어그램
+### 단일 인스턴스 아키텍처 (GLM-5.2 등)
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                    Your Applications                          │
@@ -304,9 +329,49 @@ curl http://localhost:4000/v1/chat/completions \
             ▼
     ┌─────────────────┐
     │   LLM Models    │
-    │  5-35B Models   │
-    │ 128GB LPDDRX    │
+    │  744B Models    │
+    │ 256GB LPDDRX    │
     └─────────────────┘
+```
+
+### Multi-Instance 아키텍처 (Gemma 4 31B - Data Parallelism) 🆕
+```
+클라이언트
+    │
+    ▼
+┌──────────────────────────────────────────────────────────┐
+│         LiteLLM Proxy (라운드로빈 + 부하 분배)            │
+│              :4000                                        │
+│         usage-based-routing-v2                           │
+└──────────────────────────────────────────────────────────┘
+    │
+    ├──────────────┬──────────────┬──────────────┬─────────────┐
+    ▼              ▼              ▼              ▼             ▼
+┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+│Instance │  │Instance │  │Instance │  │Instance │
+│   A     │  │   B     │  │   C     │  │   D     │
+│ :8081   │  │ :8082   │  │ :8083   │  │ :8084   │
+└────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
+     │            │            │            │
+     └────────────┴────────────┬┴────────────┘
+                                │
+     ┌──────────────────────────┼──────────────────────────┐
+     │              ConnectX7 (400Gbps)                    │
+     │          (WS1 ↔ WS2 고속 연결)                      │
+     │                                                      │
+  ┌──▼──────────────┐              ┌─────────────────▼───┐
+  │ 워크스테이션 1   │              │  워크스테이션 2     │
+  │   128GB         │              │     128GB          │
+  │ Instance A (20GB) │            │ Instance C (20GB)   │
+  │ Instance B (20GB) │            │ Instance D (20GB)   │
+  │ Spare: 88GB     │              │ Spare: 88GB        │
+  └─────────────────┘              └────────────────────┘
+
+장점:
+✅ 4명 동시 사용자 처리
+✅ 각 인스턴스 독립 실행 (장애 격리)
+✅ 각 워크스테이션 당 88GB KV 캐시 가용
+✅ ConnectX7로 고속 네트워킹
 ```
 
 ### 네트워킹
@@ -360,19 +425,45 @@ curl http://localhost:4000/v1/chat/completions \
 
 ### Grace Blackwell 워크스테이션 (HIGH 프로파일)
 
+#### 단일 128GB 워크스테이션
 ```
-✅ 2x NVIDIA GB10 Grace Blackwell Superchip
+✅ NVIDIA GB10 Grace Blackwell Superchip (단일)
 ✅ 128GB LPDDRX Memory (고대역폭)
 ✅ 4TB SSD
-✅ NVIDIA ConnectX7 (400Gbps 인터커넥트)
+✅ NVIDIA ConnectX7
 
 최적화 설정:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• 메모리: 120GB shm-size, 124GB 메모리 제한
-• GPU: 64개 레이어 (전체 GPU에 로드)
-• 컨텍스트: 256K 토큰
-• 배치: n=16384
-• TP: 2 (분산 처리)
+• 권장 모델: GLM-5.2 IQ3_XXS (110GB, 단일 로드)
+• 메모리: 100GB shm-size, 124GB 메모리 제한
+• GPU: 64개 레이어
+• 컨텍스트: 65K 토큰
+```
+
+#### 256GB 클러스터 (2 × 128GB 워크스테이션 + ConnectX7)
+```
+✅ 2x NVIDIA GB10 Grace Blackwell Superchip
+✅ 256GB LPDDRX Memory 총합 (고대역폭 통합)
+✅ NVIDIA ConnectX7 (400Gbps 인터커넥트)
+
+최적화 설정 (GLM-5.2):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 권장 모델: GLM-5.2 IQ1_S (223GB, 1-bit 극압축)
+• 메모리/워크스테이션: 120GB shm-size, 124GB 제한
+• 여유: 33GB (OS, 백그라운드, KV 캐시)
+• 컨텍스트: 32-65K 토큰
+• 배치: n=8192
+• 특징: Tensor Parallelism 불필요 (단일 모델)
+
+최적화 설정 (Gemma 4 31B - Multi-Instance):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 인스턴스: 4개 (2개/워크스테이션)
+• 메모리/인스턴스: 32GB shm-size, 40GB 제한
+• 모델/인스턴스: 20GB 차용, 25GB KV 캐시
+• 여유/워크스테이션: ~88GB (추가 캐싱, 컨텍스트)
+• 컨텍스트: 45K 토큰
+• 특징: Continuous Batching (--cb), 4개 병렬 요청
+• 라우팅: LiteLLM usage-based-routing (부하 분산)
 ```
 
 ---
@@ -380,6 +471,8 @@ curl http://localhost:4000/v1/chat/completions \
 ## 🔧 설정 파일
 
 ### litellm_config.yaml (자동 생성)
+
+#### 단일 인스턴스 모드 (GLM-5.2 등)
 ```yaml
 model_list:
   - model_name: "local"
@@ -399,10 +492,50 @@ general_settings:
   master_key: "sk-local-master"
 ```
 
+#### 다중 인스턴스 모드 (Gemma 4 31B - Data Parallelism) 🆕
+```yaml
+model_list:
+  # 워크스테이션 1
+  - model_name: "gemma-4-31b"
+    litellm_params:
+      model: "openai/gemma-4-31b"
+      api_base: "http://localhost:8081"
+  
+  - model_name: "gemma-4-31b"
+    litellm_params:
+      model: "openai/gemma-4-31b"
+      api_base: "http://localhost:8082"
+  
+  # 워크스테이션 2 (네트워크 기반)
+  - model_name: "gemma-4-31b"
+    litellm_params:
+      model: "openai/gemma-4-31b"
+      api_base: "http://<WS2-IP>:8083"
+  
+  - model_name: "gemma-4-31b"
+    litellm_params:
+      model: "openai/gemma-4-31b"
+      api_base: "http://<WS2-IP>:8084"
+
+router_settings:
+  routing_strategy: usage-based-routing-v2  # 부하 기반 분배 (라운드로빈보다 효율적)
+  
+litellm_settings:
+  drop_params: true
+  cache: true
+  cache_params:
+    type: "local"
+    supported_call_types: ["completion", "text_completion"]
+
+general_settings:
+  master_key: "sk-local-master"
+```
+
 **기능**:
 - ✅ 시맨틱 캐싱: 유사한 요청 즉시 응답
 - ✅ 요청 로깅: 모든 API 호출 기록
 - ✅ 모델 라우팅: 자동으로 llama.cpp로 전달
+- ✅ (Multi-Instance) 부하 분산: 4개 인스턴스 중 가장 한가한 곳으로 요청 분배
 
 ---
 
@@ -487,14 +620,16 @@ sudo yum install newt
 
 ### 모델 선택 가이드
 
-| 사용 환경 | 권장 모델 | 이유 |
-|---------|---------|------|
-| **Grace Blackwell (128GB)** | GLM-5.2 / Gemma 4 31B | 최적화됨, 빠른 응답 |
-| **빠른 응답** | GLM-5.2 BF16 | 5.2B, 낮은 지연시간 |
-| **멀티모달** | GLM-5.2-Multi-Vision | 이미지/텍스트 처리 |
-| **최고 품질** | Qwen 3.6 35B A3B | 복잡한 추론 |
-| **경량 (CPU 제한)** | Gemma 4 E4B | 4B, 초경량 |
-| **멀티클라이언트** | liteLLM 포함 | 캐싱으로 속도 향상 |
+| 사용 환경 | 권장 모델 | 메모리 | 이유 |
+|---------|---------|--------|------|
+| **256GB 클러스터 (최고 품질)** | GLM-5.2 IQ1_S | 223GB | 극압축 (1-bit), 33GB 여유, 깊이있는 추론 |
+| **팀 협업 (4-10명)** | Gemma 4 31B Multi-Instance | 20GB/인스턴스 | 4개 인스턴스 + LiteLLM, 병렬 처리 |
+| **단일 128GB 워크스테이션** | GLM-5.2 IQ3_XXS | 110GB | 3-bit 압축, 충분한 여유, 균형잡힌 성능 |
+| **빠른 응답** | GLM-5.2 IQ2_M | 245GB | 2-bit 압축, 높은 품질, 부하 분산 필요 |
+| **멀티모달** | GLM-5.2-Multi-Vision | 변동 | 이미지/텍스트 처리 |
+| **최고 추론 품질** | Qwen 3.6 35B A3B | 19GB | 복잡한 논리, 코딩 |
+| **경량 (로컬 테스트)** | Gemma 4 E4B | 7-8GB | 4B, 초경량, 빠른 테스트 |
+| **캐싱 성능** | liteLLM 포함 | 1GB 미만 | 시맨틱 캐싱, 부하 분산 |
 
 ### 최적화 팁
 1. **자동 감지**: 스크립트가 실행 시 하드웨어를 자동으로 감지하고 최적화합니다
@@ -649,18 +784,35 @@ docker logs --tail 100 llama-server
 
 ---
 
-**Last Updated**: 2026-06-24  
-**Version**: 2.0 (Grace Blackwell Optimization)  
+**Last Updated**: 2026-06-25  
+**Version**: 2.1 (Multi-Instance + GLM-5.2 Optimization)  
 **Author**: Claude Code  
 **Repository**: https://github.com/tsis-mobile-technology/localLLMService
 
-### 변경사항 (v2.0)
-- ✨ **GLM-5.2 모델 추가** (권장)
-- 🎯 **NVIDIA GB10 Grace Blackwell 최적화**
+### 변경사항 (v2.1)
+- 🆕 **Gemma 4 31B Multi-Instance Mode (Data Parallelism)**
+  - 4개 독립 인스턴스 (2개/워크스테이션)
+  - LiteLLM 라운드로빈 + usage-based 부하 분산
+  - 팀 협업 (5-10명) 최적화
+  - Continuous Batching (--cb) 지원
+  - 45K 컨텍스트 윈도우 (8K-32K 프롬프트 대응)
+
+- 🔄 **GLM-5.2 양자화 옵션 재정의**
+  - IQ1_S (1-bit, 223GB) - 256GB 클러스터 권장
+  - IQ2_M (2-bit, 245GB) - 고품질 압축
+  - IQ3_XXS (3-bit, 110GB) - 단일 128GB 최적
+  - ~~Q8_0, BF16~~ (구 버전, 메모리 비효율)
+
+- 📊 **HuggingFace Hub 직접 로드**
+  - 로컬 파일 + HuggingFace 자동 감지
+  - LLAMA_CACHE 환경변수 자동 설정
+  - 첫 실행: 자동 다운로드, 2회차+: 캐시 활용
+
+- 🎯 **NVIDIA GB10 Grace Blackwell 최적화 (유지)**
   - 128GB LPDDRX 메모리 풀 활용
-  - 듀얼 Superchip 분산 처리 (TP=2)
-  - ConnectX7 고대역폭 인터커넥트
+  - ConnectX7 고대역폭 인터커넥트 (400Gbps)
+  - 256GB 클러스터 지원 (2 × 워크스테이션)
   - 256K 토큰 컨텍스트 지원
-  - TF32 정밀도 최적화
-- 🚀 **SGLang 고성능 추론 엔진 지원**
-- 📊 **확장된 모델 라이브러리** (7가지 모델)
+
+- 🚀 **SGLang 고성능 추론 엔진 지원 (유지)**
+- 📋 **자동 하드웨어 감지** (LOW/MEDIUM/HIGH 프로파일)
