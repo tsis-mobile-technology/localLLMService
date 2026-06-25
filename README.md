@@ -20,6 +20,7 @@
 | **Gemma 4 E4B** | 4B/8B | Q4_K_M | 7-8GB | 131K | 초경량, 풀 GPU | 1개 |
 | **Gemma 4 26B A4B** | 26B | Q4_K_M | 16GB | 256K | MoE 혼합, GPU | 1개 |
 | **Qwen 3.6 35B A3B** | 35B | Q4_0 | 19GB | 256K | MoE 고급 | 1개 |
+| **DeepSeek-Coder-V2** (Long-Doc) | 236B | Q4_K_S | 60-65GB | 164K | MoE 코딩 특화, 장문서 분석 | 7개 |
 
 **LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**
 
@@ -27,6 +28,13 @@
 - **HuggingFace**: https://huggingface.co/unsloth/GLM-5.2-GGUF (unsloth GGUF 버전)
 - **양자화 옵션**: IQ1_S (1-bit, 223GB), IQ2_M (2-bit, 245GB), IQ3_XXS (3-bit, 110GB)
 - **256GB 클러스터 환경**: IQ1_S 권장 (메모리 효율적, 33GB 여유)
+
+**DeepSeek-Coder-V2** (236B, 21B 활성 파라미터):
+- **HuggingFace**: https://huggingface.co/bullerwins/DeepSeek-Coder-V2-Instruct-GGUF (GGUF 변환)
+- **양자화**: Q4_K_S (60-65GB, 7개 파일)
+- **컨텍스트**: 164K 토큰 (Gemma 4 31B의 3배)
+- **특징**: 코딩 특화, MoE 구조 (6/6 experts), 장문서 분석 최적화
+- **256GB 클러스터**: 3-4개 인스턴스 + LiteLLM 라운드로빈
 
 ### 💎 선택적 liteLLM 프록시 레이어
 ```
@@ -624,6 +632,7 @@ sudo yum install newt
 |---------|---------|--------|------|
 | **256GB 클러스터 (최고 품질)** | GLM-5.2 IQ1_S | 223GB | 극압축 (1-bit), 33GB 여유, 깊이있는 추론 |
 | **팀 협업 (4-10명)** | Gemma 4 31B Multi-Instance | 20GB/인스턴스 | 4개 인스턴스 + LiteLLM, 병렬 처리 |
+| **장문서 코딩 분석** | DeepSeek-Coder-V2 | 60-65GB | 164K 컨텍스트 (Gemma의 3배), MoE 효율성, 3-4개 인스턴스 |
 | **단일 128GB 워크스테이션** | GLM-5.2 IQ3_XXS | 110GB | 3-bit 압축, 충분한 여유, 균형잡힌 성능 |
 | **빠른 응답** | GLM-5.2 IQ2_M | 245GB | 2-bit 압축, 높은 품질, 부하 분산 필요 |
 | **멀티모달** | GLM-5.2-Multi-Vision | 변동 | 이미지/텍스트 처리 |
@@ -784,12 +793,19 @@ docker logs --tail 100 llama-server
 
 ---
 
-**Last Updated**: 2026-06-25  
-**Version**: 2.1 (Multi-Instance + GLM-5.2 Optimization)  
+**Last Updated**: 2026-06-26  
+**Version**: 2.1 (Multi-Instance + GLM-5.2 Optimization + DeepSeek-Coder-V2)  
 **Author**: Claude Code  
 **Repository**: https://github.com/tsis-mobile-technology/localLLMService
 
 ### 변경사항 (v2.1)
+- 🆕 **DeepSeek-Coder-V2 (164K Context Long-Document Coding)**
+  - Q4_K_S 양자화 (60-65GB, 7개 파일)
+  - 164K 컨텍스트 (Gemma 4 31B의 3배)
+  - MoE 구조 (236B, 21B 활성) - 효율적 추론
+  - 3-4개 인스턴스 + LiteLLM 라운드로빈
+  - 전체 파일/프로젝트 분석, 긴 코드 리뷰 최적화
+
 - 🆕 **Gemma 4 31B Multi-Instance Mode (Data Parallelism)**
   - 4개 독립 인스턴스 (2개/워크스테이션)
   - LiteLLM 라운드로빈 + usage-based 부하 분산
@@ -816,3 +832,4 @@ docker logs --tail 100 llama-server
 
 - 🚀 **SGLang 고성능 추론 엔진 지원 (유지)**
 - 📋 **자동 하드웨어 감지** (LOW/MEDIUM/HIGH 프로파일)
+- ✨ **지원 모델 수**: 8개 → **9개** (DeepSeek-Coder-V2 추가)
