@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # ============================================================================
-# LLaMA.cpp Interactive Docker Model Launcher (Multi-Hardware Support)
+# LLaMA.cpp Interactive Docker Model Launcher (Multi-Node Distributed Support)
 # ============================================================================
 # Auto-detects hardware profile (LOW/MEDIUM/HIGH) and optimizes parameters.
-# Supports: < 12GB (Gemma 4 E4B), 12-24GB (Gemma 4 31B), > 24GB (Qwen 35B A3B)
+# Supports distributed inference via ConnectX-7 RDMA with Head/Worker topology.
+# Usage: ./docker_run.sh [--role head|worker] [--head-ip 192.168.100.1]
 # ============================================================================
 
 # --- Constants ---------------------------------------------------------------
@@ -13,6 +14,12 @@ readonly MODELS_DIR="$HOME/Programming/models"
 readonly CONTAINER_NAME="llama-server"
 readonly DOCKER_IMAGE="ghcr.io/ggml-org/llama.cpp:server-cuda"
 readonly PORT=8080
+
+# Multi-node configuration (ConnectX-7 RDMA)
+NODE_ROLE="auto"  # auto, head, or worker
+HEAD_NODE_IP="192.168.100.1"
+THIS_NODE_IP=""
+CONNECTX_INTERFACE=""  # Will be auto-detected
 
 # Hardware profile detection (will be set by detect_hardware_profile)
 HARDWARE_PROFILE=""
@@ -211,6 +218,87 @@ detect_hardware_profile() {
 
 # --- Utility Functions -------------------------------------------------------
 
+# Parse command-line arguments for multi-node setup
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --role)
+                NODE_ROLE="$2"
+                shift 2
+                ;;
+            --head-ip)
+                HEAD_NODE_IP="$2"
+                shift 2
+                ;;
+            --this-ip)
+                THIS_NODE_IP="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+}
+
+# Auto-detect this node's IP address in 192.168.100.x range
+detect_node_ip() {
+    if [[ -n "$THIS_NODE_IP" ]]; then
+        return  # User provided explicit IP
+    fi
+
+    # Try to find network interface with 192.168.100.x address
+    if command -v ip &>/dev/null; then
+        THIS_NODE_IP=$(ip addr show 2>/dev/null | grep "192\.168\.100\." | awk '{print $2}' | cut -d'/' -f1 | head -n1)
+    elif command -v ifconfig &>/dev/null; then
+        THIS_NODE_IP=$(ifconfig 2>/dev/null | grep -A 1 "192\.168\.100\." | awk '/inet/{print $2}' | head -n1)
+    fi
+
+    if [[ -z "$THIS_NODE_IP" ]]; then
+        echo "Warning: Could not auto-detect 192.168.100.x IP address"
+        THIS_NODE_IP="127.0.0.1"
+    fi
+}
+
+# Auto-detect ConnectX-7 interface (ib0, enpXs0, etc.)
+detect_connectx_interface() {
+    if command -v ip &>/dev/null; then
+        # Look for interface with 192.168.100.x address
+        CONNECTX_INTERFACE=$(ip addr show 2>/dev/null | grep -B 1 "192\.168\.100\." | grep "^[0-9]:" | sed 's/:.*//; s/^[0-9]*[[:space:]]*//g' | head -n1)
+    elif command -v ifconfig &>/dev/null; then
+        # Fallback for macOS
+        CONNECTX_INTERFACE=$(ifconfig 2>/dev/null | grep -B 5 "192\.168\.100\." | grep "^[a-z]" | awk '{print $1}' | head -n1)
+    fi
+
+    # If not found, try common ConnectX interface names
+    if [[ -z "$CONNECTX_INTERFACE" ]]; then
+        for iface in ib0 ib1 enpXs0 ens0; do
+            if command -v ip &>/dev/null && ip addr show "$iface" 2>/dev/null | grep -q "192\.168\.100\."; then
+                CONNECTX_INTERFACE="$iface"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "$CONNECTX_INTERFACE" ]]; then
+        echo "Warning: Could not detect ConnectX interface. NCCL may fall back to Ethernet."
+        CONNECTX_INTERFACE="eth0"  # Fallback
+    fi
+}
+
+# Determine node role automatically based on IP
+auto_detect_node_role() {
+    if [[ "$NODE_ROLE" != "auto" ]]; then
+        return  # User explicitly set role
+    fi
+
+    if [[ "$THIS_NODE_IP" == "$HEAD_NODE_IP" ]] || [[ "$THIS_NODE_IP" == "192.168.100.1" ]]; then
+        NODE_ROLE="head"
+    else
+        NODE_ROLE="worker"
+    fi
+}
+
 # Get current container status
 get_container_status() {
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
@@ -368,6 +456,16 @@ show_model_menu() {
         HIGH) hardware_info="🟢 HIGH (≥ 24GB VRAM)" ;;
     esac
 
+    # Multi-node status
+    local node_info
+    if [[ "$NODE_ROLE" == "head" ]]; then
+        node_info="🟢 HEAD Node (192.168.100.1)"
+    elif [[ "$NODE_ROLE" == "worker" ]]; then
+        node_info="🔵 WORKER Node (awaits head)"
+    else
+        node_info="⚪ STANDALONE Node"
+    fi
+
     # Build menu items array
     local menu_items=()
     for i in "${!MODEL_NAMES[@]}"; do
@@ -393,9 +491,9 @@ show_model_menu() {
     # Show whiptail menu
     local choice
     choice=$(whiptail \
-        --title "🦙 LLaMA.cpp Model Launcher (Auto-Optimized)" \
-        --menu "Status: $status_line │ Hardware: $hardware_info | GPU: ${GPU_COUNT}x ${GPU_MEMORY_GB}GB = ${GPU_TOTAL_MEMORY_GB}GB total (devices: ${CUDA_DEVICES:-CPU-only})\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
-        32 105 8 \
+        --title "🦙 LLaMA.cpp Model Launcher (Multi-Node Distributed)" \
+        --menu "Status: $status_line │ Hardware: $hardware_info | Node: $node_info\nNetwork: ${CONNECTX_INTERFACE} (192.168.100.x) | GPU: ${GPU_COUNT}x ${GPU_MEMORY_GB}GB = ${GPU_TOTAL_MEMORY_GB}GB total\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
+        35 110 8 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 
@@ -488,6 +586,25 @@ launch_multi_instance() {
         docker rm "$name" 2>/dev/null || true
     done
 
+    # Multi-node RDMA configuration (same as launch_model)
+    local network_args=()
+    local nccl_args=()
+
+    network_args+=(--network host)
+    network_args+=(--ipc host)
+
+    if [ -c /dev/infiniband/rdma_cm ] 2>/dev/null || [ -d /dev/infiniband ]; then
+        network_args+=(--device=/dev/infiniband)
+    fi
+
+    network_args+=(--cap-add IPC_LOCK)
+    network_args+=(--ulimit memlock=-1:-1)
+
+    nccl_args+=(-e "NCCL_SOCKET_IFNAME=${CONNECTX_INTERFACE}")
+    nccl_args+=(-e "NCCL_IB_DISABLE=0")
+    nccl_args+=(-e "NCCL_IB_HCA=mlx5")
+    nccl_args+=(-e "NCCL_DEBUG=INFO")
+
     # Launch instances
     local start_port=8081
     for i in $(seq 0 $((instance_count - 1))); do
@@ -500,23 +617,26 @@ launch_multi_instance() {
 
         docker run -d --name "$instance_name" \
             --gpus all \
-            --cap-add IPC_LOCK \
+            ${network_args[@]+"${network_args[@]}"} \
+            ${nccl_args[@]+"${nccl_args[@]}"} \
             --cap-add SYS_ADMIN \
-            --ulimit memlock=-1:-1 \
             --ulimit stack=67108864 \
             --shm-size "$shm_size" \
             --memory "$memory_limit" \
             -p ${port}:8080 \
             -v "${MODELS_DIR}:/models" \
             -e "LLAMA_CACHE=/models" \
+            -e "NODE_ROLE=${NODE_ROLE}" \
+            -e "HEAD_NODE_IP=${HEAD_NODE_IP}" \
+            -e "THIS_NODE_IP=${THIS_NODE_IP}" \
             "$DOCKER_IMAGE" \
             -hf "$model_file" \
             --host 0.0.0.0 \
             $extra_args \
             2>/dev/null || {
             whiptail --title "❌ Docker Error" \
-                --msgbox "Failed to launch instance $i on port $port.\n\nPlease check:\n- Docker is running\n- Port $port is available\n- NVIDIA Container Toolkit installed\n- Sufficient VRAM" \
-                12 70
+                --msgbox "Failed to launch instance $i on port $port.\n\nPlease check:\n- Docker is running\n- Port $port is available\n- NVIDIA Container Toolkit installed\n- Sufficient VRAM\n- 192.168.100.x network available" \
+                14 70
             return 1
         }
 
@@ -596,6 +716,30 @@ launch_model() {
         split_args+=(--split-mode layer)
     fi
 
+    # Multi-node RDMA/ConnectX-7 configuration
+    local network_args=()
+    local nccl_args=()
+
+    # Use host network and IPC for low-latency inter-container communication
+    network_args+=(--network host)
+    network_args+=(--ipc host)
+
+    # InfiniBand device support (if available)
+    if [ -c /dev/infiniband/rdma_cm ] 2>/dev/null || [ -d /dev/infiniband ]; then
+        network_args+=(--device=/dev/infiniband)
+    fi
+
+    # RDMA memory locking configuration (required for ConnectX-7)
+    network_args+=(--cap-add IPC_LOCK)
+    network_args+=(--ulimit memlock=-1:-1)
+
+    # NCCL configuration for InfiniBand/RoCE communication
+    nccl_args+=(-e "NCCL_SOCKET_IFNAME=${CONNECTX_INTERFACE}")
+    nccl_args+=(-e "NCCL_IB_DISABLE=0")
+    nccl_args+=(-e "NCCL_IB_HCA=mlx5")
+    nccl_args+=(-e "NCCL_ALGO=Ring")
+    nccl_args+=(-e "NCCL_DEBUG=INFO")
+
     # Determine if model is from HuggingFace hub or local file
     local model_arg
     if [[ "$model_file" == *"/"* ]] && [[ "$model_file" != "/"* ]]; then
@@ -608,15 +752,18 @@ launch_model() {
 
     docker run -d --name "$CONTAINER_NAME" \
         ${gpu_args[@]+"${gpu_args[@]}"} \
-        --cap-add IPC_LOCK \
+        ${network_args[@]+"${network_args[@]}"} \
+        ${nccl_args[@]+"${nccl_args[@]}"} \
         --cap-add SYS_ADMIN \
-        --ulimit memlock=-1:-1 \
         --ulimit stack=67108864 \
         --shm-size "$shm_size" \
         --memory "$memory_limit" \
         -p ${PORT}:8080 \
         -v "${MODELS_DIR}:/models" \
         -e "LLAMA_CACHE=/models" \
+        -e "NODE_ROLE=${NODE_ROLE}" \
+        -e "HEAD_NODE_IP=${HEAD_NODE_IP}" \
+        -e "THIS_NODE_IP=${THIS_NODE_IP}" \
         "$DOCKER_IMAGE" \
         $model_arg \
         --host 0.0.0.0 \
@@ -626,8 +773,8 @@ launch_model() {
         $extra_args \
         2>/dev/null || {
         whiptail --title "❌ Docker Error" \
-            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled\n- Detected GPUs: $GPU_COUNT (devices: ${CUDA_DEVICES:-CPU-only})\n- Sufficient VRAM for selected model (${GPU_MEMORY_GB}GB per GPU, ${GPU_TOTAL_MEMORY_GB}GB total)" \
-            14 75
+            --msgbox "Failed to launch docker container.\n\nPlease check:\n- Docker is running\n- No other container uses port $PORT\n- NVIDIA Container Toolkit is properly installed\n- GPU (CUDA) support is enabled\n- Detected GPUs: $GPU_COUNT (devices: ${CUDA_DEVICES:-CPU-only})\n- Sufficient VRAM for selected model (${GPU_MEMORY_GB}GB per GPU, ${GPU_TOTAL_MEMORY_GB}GB total)\n- 192.168.100.x network interface available\n- InfiniBand drivers installed (for multi-node)" \
+            16 75
         return 1
     }
 }
@@ -635,6 +782,24 @@ launch_model() {
 # --- Main Flow ---------------------------------------------------------------
 
 main() {
+    # Parse command-line arguments for multi-node configuration
+    parse_arguments "$@"
+
+    # Detect network configuration
+    detect_node_ip
+    detect_connectx_interface
+    auto_detect_node_role
+
+    # Display multi-node configuration
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Multi-Node Configuration:"
+    echo "  Node Role:          $NODE_ROLE"
+    echo "  This Node IP:       $THIS_NODE_IP"
+    echo "  Head Node IP:       $HEAD_NODE_IP"
+    echo "  ConnectX Interface: $CONNECTX_INTERFACE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
     check_whiptail
     check_prerequisites
 
@@ -714,4 +879,4 @@ main() {
 }
 
 # --- Entry Point -------------------------------------------------------------
-main
+main "$@"
