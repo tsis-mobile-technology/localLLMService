@@ -10,7 +10,7 @@ set -euo pipefail
 # ============================================================================
 
 # --- Constants ---------------------------------------------------------------
-readonly MODELS_DIR="$HOME/Programming/models"
+readonly MODELS_DIR="$(pwd)"
 readonly CONTAINER_NAME="llama-server"
 readonly DOCKER_IMAGE="ghcr.io/ggml-org/llama.cpp:server-cuda"
 readonly PORT=8080
