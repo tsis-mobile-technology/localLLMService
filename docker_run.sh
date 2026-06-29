@@ -264,10 +264,10 @@ detect_node_ip() {
 detect_connectx_interface() {
     if command -v ip &>/dev/null; then
         # Look for interface with 192.168.100.x address
-        CONNECTX_INTERFACE=$(ip addr show 2>/dev/null | grep -B 1 "192\.168\.100\." | grep "^[0-9]:" | sed 's/:.*//; s/^[0-9]*[[:space:]]*//g' | head -n1)
+        CONNECTX_INTERFACE=$(ip -o addr show 2>/dev/null | grep "192\.168\.100\." | awk '{print $2}' | head -n1 || true)
     elif command -v ifconfig &>/dev/null; then
         # Fallback for macOS
-        CONNECTX_INTERFACE=$(ifconfig 2>/dev/null | grep -B 5 "192\.168\.100\." | grep "^[a-z]" | awk '{print $1}' | head -n1)
+        CONNECTX_INTERFACE=$(ifconfig 2>/dev/null | grep -B 5 "192\.168\.100\." | grep "^[a-z]" | awk '{print $1}' | head -n1 || true)
     fi
 
     # If not found, try common ConnectX interface names
