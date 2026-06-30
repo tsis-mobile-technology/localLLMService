@@ -57,9 +57,9 @@ readonly MODEL_FILES=(
     "unsloth/GLM-5.2-GGUF:UD-IQ2_M"
     "unsloth/GLM-5.2-GGUF:UD-IQ3_XXS"
     "unsloth/gemma-4-31b-it-GGUF:UD-Q4_K_XL"
-    "google_gemma-4-E4B-it-Q4_K_M.gguf"
-    "google_gemma-4-E4B-it-Q8_0.gguf"
-    "google_gemma-4-26B-A4B-it-Q4_K_M.gguf"
+    "unsloth/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf"
+    "unsloth/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q8_0.gguf"
+    "unsloth/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf"
     "Qwen_Qwen3.6-35B-A3B-Q4_0.gguf"
     "bullerwins/DeepSeek-Coder-V2-Instruct-GGUF:DeepSeek-Coder-V2-Instruct-Q4_K_S"
 )
