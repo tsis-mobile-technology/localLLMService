@@ -485,15 +485,24 @@ show_model_menu() {
 
         # Build item with proper spacing
         local item_text="[$exists_mark] $name  ($size) │ $desc"
+        
+        # Truncate text to prevent whiptail UI from breaking on smaller terminals
+        local term_cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}
+        local max_len=$(( term_cols - 12 ))
+        [ "$max_len" -lt 50 ] && max_len=50
+        if [ ${#item_text} -gt $max_len ]; then
+            item_text="${item_text:0:$((max_len-3))}..."
+        fi
+
         menu_items+=("$id" "$item_text")
     done
 
-    # Show whiptail menu
+    # Show whiptail menu (0 0 0 enables auto-sizing to fit terminal)
     local choice
     choice=$(whiptail \
         --title "🦙 LLaMA.cpp Model Launcher (Multi-Node Distributed)" \
         --menu "Status: $status_line │ Hardware: $hardware_info | Node: $node_info\nNetwork: ${CONNECTX_INTERFACE} (192.168.100.x) | GPU: ${GPU_COUNT}x ${GPU_MEMORY_GB}GB = ${GPU_TOTAL_MEMORY_GB}GB total\n\nSelect a model to launch:\n[✓] File exists  [✗] File missing" \
-        35 110 8 \
+        0 0 0 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 
