@@ -386,13 +386,33 @@ check_whiptail() {
 
 # Generate liteLLM configuration file
 generate_litellm_config() {
-    cat > "$LITELLM_CONFIG" <<'YAML'
+    local endpoints=("$@")
+    
+    cat > "$LITELLM_CONFIG" <<EOF
 model_list:
+EOF
+
+    if [ ${#endpoints[@]} -eq 0 ]; then
+        cat >> "$LITELLM_CONFIG" <<EOF
   - model_name: "gpt-4o"
     litellm_params:
       model: "openai/local"
       api_base: "http://host.docker.internal:8080"
       api_key: "sk-local"
+EOF
+    else
+        for endpoint in "${endpoints[@]}"; do
+            cat >> "$LITELLM_CONFIG" <<EOF
+  - model_name: "gpt-4o"
+    litellm_params:
+      model: "openai/local"
+      api_base: "${endpoint}"
+      api_key: "sk-local"
+EOF
+        done
+    fi
+
+    cat >> "$LITELLM_CONFIG" <<EOF
 
 litellm_settings:
   drop_params: true
@@ -403,7 +423,7 @@ litellm_settings:
 
 general_settings:
   master_key: "sk-local-master"
-YAML
+EOF
 }
 
 # Stop liteLLM container if running
@@ -579,14 +599,32 @@ launch_multi_instance() {
         return 1
     fi
 
-    # Determine instance count based on hardware
-    local instance_count=2  # Default: 2 instances per workstation
-    if whiptail --title "⚙️ Instance Configuration" \
-        --yesno "Multi-Instance Mode Detected!\n\nDefault: 2 instances per workstation\n(4 instances total with 2 workstations)\n\nCurrent setting: $instance_count instances\n\nContinue with default configuration?" \
-        12 70; then
-        :
+    # Determine instance count based on user input
+    local local_instances=2
+    local local_input
+    local_input=$(whiptail --title "⚙️ Instance Configuration" \
+        --inputbox "Multi-Instance Mode Detected!\n\nHow many instances to run on THIS local machine?" \
+        12 70 "$local_instances" 3>&1 1>&2 2>&3)
+    if [ $? -eq 0 ] && [[ "$local_input" =~ ^[0-9]+$ ]]; then
+        local_instances=$local_input
     else
         return 1
+    fi
+
+    local worker_instances=0
+    local worker_ip="192.168.100.2"
+    if [[ "$NODE_ROLE" == "head" ]]; then
+        if whiptail --title "🌐 Worker Node Configuration" \
+            --yesno "Include worker node ($worker_ip) instances in LiteLLM Load Balancer?\n\n(You can auto-deploy them via SSH next, or start them manually.)" \
+            12 70; then
+            local worker_input
+            worker_input=$(whiptail --title "🌐 Worker Node Instances" \
+                --inputbox "How many instances will run on the Worker Node ($worker_ip)?" \
+                10 70 "2" 3>&1 1>&2 2>&3)
+            if [ $? -eq 0 ] && [[ "$worker_input" =~ ^[0-9]+$ ]]; then
+                worker_instances=$worker_input
+            fi
+        fi
     fi
 
     # Stop existing containers
@@ -595,28 +633,15 @@ launch_multi_instance() {
         docker rm "$name" 2>/dev/null || true
     done
 
-    # Multi-node RDMA configuration (same as launch_model)
+    # Data Parallelism doesn't need cross-node NCCL, so we skip nccl_args
     local network_args=()
-    local nccl_args=()
-
     network_args+=(--network host)
     network_args+=(--ipc host)
 
-    if [ -c /dev/infiniband/rdma_cm ] 2>/dev/null || [ -d /dev/infiniband ]; then
-        network_args+=(--device=/dev/infiniband)
-    fi
-
-    network_args+=(--cap-add IPC_LOCK)
-    network_args+=(--ulimit memlock=-1:-1)
-
-    nccl_args+=(-e "NCCL_SOCKET_IFNAME=${CONNECTX_INTERFACE}")
-    nccl_args+=(-e "NCCL_IB_DISABLE=0")
-    nccl_args+=(-e "NCCL_IB_HCA=mlx5")
-    nccl_args+=(-e "NCCL_DEBUG=INFO")
-
-    # Launch instances
+    # Launch local instances
     local start_port=8081
-    for i in $(seq 0 $((instance_count - 1))); do
+    MULTI_INSTANCE_ENDPOINTS=()
+    for i in $(seq 0 $((local_instances - 1))); do
         local port=$((start_port + i))
         local instance_name="gemma-31b-instance-$i"
 
@@ -627,7 +652,6 @@ launch_multi_instance() {
         docker run -d --name "$instance_name" \
             --gpus all \
             ${network_args[@]+"${network_args[@]}"} \
-            ${nccl_args[@]+"${nccl_args[@]}"} \
             --cap-add SYS_ADMIN \
             --ulimit stack=67108864 \
             --shm-size "$shm_size" \
@@ -644,17 +668,38 @@ launch_multi_instance() {
             $extra_args \
             2>/dev/null || {
             whiptail --title "❌ Docker Error" \
-                --msgbox "Failed to launch instance $i on port $port.\n\nPlease check:\n- Docker is running\n- Port $port is available\n- NVIDIA Container Toolkit installed\n- Sufficient VRAM\n- 192.168.100.x network available" \
-                14 70
+                --msgbox "Failed to launch instance $i on port $port." 10 70
             return 1
         }
 
+        MULTI_INSTANCE_ENDPOINTS+=("http://host.docker.internal:${port}")
         echo "✅ Launched $instance_name on port $port"
         sleep 1
     done
 
+    # Add worker endpoints
+    if [ "$worker_instances" -gt 0 ]; then
+        for i in $(seq 0 $((worker_instances - 1))); do
+            local port=$((start_port + i))
+            MULTI_INSTANCE_ENDPOINTS+=("http://${worker_ip}:${port}")
+        done
+        
+        # Ask for SSH auto-deployment
+        if whiptail --title "🚀 SSH Auto-Deploy" \
+            --yesno "Do you want to automatically deploy the $worker_instances instances to the Worker Node via SSH?\n\nThis requires passwordless SSH access to $worker_ip." \
+            12 70; then
+            echo "Deploying to Worker Node via SSH..."
+            ssh -o StrictHostKeyChecking=no "$worker_ip" "cd $MODELS_DIR && ./docker_run.sh --role worker" &
+            echo "Worker deployment command sent in background."
+        else
+            whiptail --title "ℹ️ Manual Deployment Required" \
+                --msgbox "Please ensure you run docker_run.sh on the Worker Node ($worker_ip) manually to start the instances." \
+                10 70
+        fi
+    fi
+
     whiptail --title "✅ Multi-Instance Started" \
-        --msgbox "Successfully launched $instance_count instances:\n\n$(for i in $(seq 0 $((instance_count - 1))); do echo "  Instance $i: http://localhost:$((start_port + i))"; done)\n\nNext: Launch LiteLLM to aggregate these instances.\n\nPorts: $start_port-$((start_port + instance_count - 1))" \
+        --msgbox "Successfully started instances!\n\nLocal: $local_instances\nWorker: $worker_instances\n\nNext: Launch LiteLLM to aggregate these endpoints." \
         15 70
 }
 
@@ -831,13 +876,13 @@ main() {
                 # Always ask about liteLLM for multi-instance
                 if ask_litellm_option; then
                     use_litellm=true
-                    generate_litellm_config
+                    generate_litellm_config "${MULTI_INSTANCE_ENDPOINTS[@]}"
                     sleep 2
                     launch_litellm || true
                 fi
 
                 whiptail --title "✅ Setup Complete" \
-                    --msgbox "Multi-Instance + LiteLLM setup complete!\n\nInstances running on:\n  - Instance 0: http://localhost:8081\n  - Instance 1: http://localhost:8082\n  $([ -n "$1" ] && echo "- Instance 2: http://ws2:8083\n  - Instance 3: http://ws2:8084")\n\nLiteLLM Proxy: http://localhost:4000\n\nUse this for team collaboration!" \
+                    --msgbox "Multi-Instance + LiteLLM setup complete!\n\nCheck 'docker ps' for running instances.\nLiteLLM Proxy: http://localhost:4000\n\nUse this for team collaboration!" \
                     15 70
 
                 exit 0
