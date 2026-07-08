@@ -50,6 +50,7 @@ readonly MODEL_NAMES=(
     "Gemma 4 26B A4B"
     "Qwen 3.6 35B A3B"
     "DeepSeek-Coder-V2 (164K Context)"
+    "DeepSeek-V4-Pro (1.6T - Ultra Large)"
 )
 
 readonly MODEL_FILES=(
@@ -62,6 +63,7 @@ readonly MODEL_FILES=(
     "unsloth/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf"
     "Qwen_Qwen3.6-35B-A3B-Q4_0.gguf"
     "bullerwins/DeepSeek-Coder-V2-Instruct-GGUF:DeepSeek-Coder-V2-Instruct-Q4_K_S"
+    "batiai/DeepSeek-V4-Pro-GGUF:deepseek-ai-DeepSeek-V4-Pro-Q4_K_M-00001-of-00021.gguf"
 )
 
 readonly MODEL_DESCS=(
@@ -74,6 +76,7 @@ readonly MODEL_DESCS=(
     "Q4_K_M │ 256K ctx │ Full GPU      │ 26B MoE Hybrid"
     "Q4_0  │ 256K ctx │ MoE GPU       │ 35B MoE Advanced"
     "Q4_K_S │ 164K ctx │ MoE Experts (6/6) │ 236B (21B active) │ Long-Doc Coding"
+    "Q4_K_M │ 1M ctx │ 1.6T (49B active) │ 900GB (21 files) │ Ultra-Large Frontier"
 )
 
 # Model-specific arguments optimized per hardware profile
@@ -96,6 +99,7 @@ get_model_args() {
                 6)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
                 7)  echo "--n-gpu-layers 8 --n-cpu-moe 20 --cache-type-k q4_0 --cache-type-v q4_0 -c 65536 -n 1024" ;;
                 8)  echo "# ERROR: DeepSeek-Coder-V2 (60-65GB) requires HIGH or MEDIUM+ profile. Use single-node 128GB with IQ3_XXS model instead." ;;
+                9)  echo "# ERROR: DeepSeek-V4-Pro (900GB) requires HIGH profile with 256GB+ cluster and ConnectX-7 RDMA." ;;
             esac
             ;;
         MEDIUM)  # 12-24GB VRAM: GLM-5.2 & DeepSeek-V2 not supported in MEDIUM
@@ -109,6 +113,7 @@ get_model_args() {
                 6)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
                 7)  echo "--n-gpu-layers 32 -c 128000 --cache-type-k q4_0 --cache-type-v q4_0 -n 8192" ;;
                 8)  echo "# ERROR: DeepSeek-Coder-V2 (60-65GB) requires HIGH profile. Upgrade to 256GB+ cluster." ;;
+                9)  echo "# ERROR: DeepSeek-V4-Pro (900GB) requires HIGH profile with 256GB+ cluster and ConnectX-7 RDMA." ;;
             esac
             ;;
         HIGH)  # > 24GB VRAM (Grace Blackwell): 256GB cluster optimized for GLM-5.2, Gemma 4 31B, & DeepSeek-V2
@@ -122,6 +127,7 @@ get_model_args() {
                 6)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
                 7)  echo "--n-gpu-layers 64 -c 256000 --cache-type-k q4_0 --cache-type-v q4_0 -n 16384" ;;
                 8)  echo "-c 82000 -n 4096 --cb --threads 16 --parallel 4 --temp 0.7 --top-p 0.95 --min-p 0.05" ;;
+                9)  echo "-c 128000 -n 8192 --cb --threads 32 --parallel 8 --cache-type-k q4_0 --cache-type-v q4_0 --temp 0.7 --top-p 0.95 --min-p 0.05" ;;
             esac
             ;;
     esac

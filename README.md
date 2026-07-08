@@ -21,6 +21,7 @@
 | **Gemma 4 26B A4B** | 26B | Q4_K_M | 16GB | 256K | MoE 혼합, GPU | 1개 |
 | **Qwen 3.6 35B A3B** | 35B | Q4_0 | 19GB | 256K | MoE 고급 | 1개 |
 | **DeepSeek-Coder-V2** (Long-Doc) | 236B | Q4_K_S | 60-65GB | 164K | MoE 코딩 특화, 장문서 분석 | 7개 |
+| **DeepSeek-V4-Pro** (Frontier) | 1.6T | Q4_K_M | 900GB | 1M | 최대 규모, 극한 추론 | 21개 |
 
 **LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**
 
@@ -35,6 +36,13 @@
 - **컨텍스트**: 164K 토큰 (Gemma 4 31B의 3배)
 - **특징**: 코딩 특화, MoE 구조 (6/6 experts), 장문서 분석 최적화
 - **256GB 클러스터**: 3-4개 인스턴스 + LiteLLM 라운드로빈
+
+**DeepSeek-V4-Pro** (1.6T, 49B 활성 파라미터):
+- **HuggingFace**: https://huggingface.co/batiai/DeepSeek-V4-Pro-GGUF (공식 GGUF 레포)
+- **양자화**: Q4_K_M (900GB, 21개 파일) | Q3_K_M (698GB, 17개 파일)
+- **컨텍스트**: 1M 토큰 (네이티브 컨텍스트 윈도우)
+- **특징**: 최대 규모 오픈소스 모델, 극한 추론 능력, MoE 구조
+- **256GB 클러스터**: 단일 노드 배포, ConnectX-7 RDMA 필수
 
 ### 💎 선택적 liteLLM 프록시 레이어
 ```
@@ -633,6 +641,7 @@ sudo yum install newt
 | **256GB 클러스터 (최고 품질)** | GLM-5.2 IQ1_S | 223GB | 극압축 (1-bit), 33GB 여유, 깊이있는 추론 |
 | **팀 협업 (4-10명)** | Gemma 4 31B Multi-Instance | 20GB/인스턴스 | 4개 인스턴스 + LiteLLM, 병렬 처리 |
 | **장문서 코딩 분석** | DeepSeek-Coder-V2 | 60-65GB | 164K 컨텍스트 (Gemma의 3배), MoE 효율성, 3-4개 인스턴스 |
+| **극한 추론/장문맥** | DeepSeek-V4-Pro | 900GB | 1M 토큰 컨텍스트, 최대 규모, 극한 추론 능력 |
 | **단일 128GB 워크스테이션** | GLM-5.2 IQ3_XXS | 110GB | 3-bit 압축, 충분한 여유, 균형잡힌 성능 |
 | **빠른 응답** | GLM-5.2 IQ2_M | 245GB | 2-bit 압축, 높은 품질, 부하 분산 필요 |
 | **멀티모달** | GLM-5.2-Multi-Vision | 변동 | 이미지/텍스트 처리 |
@@ -793,10 +802,18 @@ docker logs --tail 100 llama-server
 
 ---
 
-**Last Updated**: 2026-06-26  
-**Version**: 2.1 (Multi-Instance + GLM-5.2 Optimization + DeepSeek-Coder-V2)  
+**Last Updated**: 2026-07-09  
+**Version**: 2.2 (DeepSeek-V4-Pro Support)  
 **Author**: Claude Code  
 **Repository**: https://github.com/tsis-mobile-technology/localLLMService
+
+### 변경사항 (v2.2)
+- 🆕 **DeepSeek-V4-Pro (1.6T - Frontier Model)**
+  - Q4_K_M 양자화 (900GB, 21개 파일) | Q3_K_M (698GB, 17개 파일)
+  - 1M 토큰 네이티브 컨텍스트 윈도우
+  - 1.6T 파라미터, 49B 활성 (MoE 구조)
+  - 극한 추론 능력, 장문맥 처리 최적화
+  - 256GB+ 클러스터 + ConnectX-7 RDMA 필수
 
 ### 변경사항 (v2.1)
 - 🆕 **DeepSeek-Coder-V2 (164K Context Long-Document Coding)**
@@ -832,4 +849,4 @@ docker logs --tail 100 llama-server
 
 - 🚀 **SGLang 고성능 추론 엔진 지원 (유지)**
 - 📋 **자동 하드웨어 감지** (LOW/MEDIUM/HIGH 프로파일)
-- ✨ **지원 모델 수**: 8개 → **9개** (DeepSeek-Coder-V2 추가)
+- ✨ **지원 모델 수**: 8개 → 9개 → **10개** (DeepSeek-V4-Pro 추가)
