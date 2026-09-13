@@ -1,63 +1,77 @@
-# 🦙 Local LLM Service - LLaMA.cpp + liteLLM + SGLang
+# 🦙 Local LLM Service Platform - LLaMA.cpp + liteLLM + PostgreSQL
 
-**NVIDIA GB10 Grace Blackwell 워크스테이션(2EA)** 최적화 버전입니다. 대화형 쉘 스크립트를 통한 로컬 LLM 서비스 관리 도구로, **whiptail TUI** 메뉴로 모델을 선택하고, **liteLLM 프록시**를 선택적으로 추가하여 시맨틱 캐싱, 로깅, Web UI 대시보드 등의 기능을 활용할 수 있습니다.
-
-## 🌟 주요 기능
-
-### 🎯 대화형 모델 선택
-- **whiptail TUI 메뉴**로 직관적인 모델 선택
-- 모델 파일 자동 감지 (파일 존재 여부, 크기 표시)
-- 현재 컨테이너 상태 실시간 표시
-
-### 🚀 다양한 LLM 모델 지원 (Grace Blackwell 최적화)
-
-| 모델 | 크기 | 양자화 | 메모리 | 컨텍스트 | 특징 | 파일 |
-|------|------|--------|--------|----------|------|------|
-| **GLM-5.2 IQ1_S** (권장) | 744B | 1-bit | 223GB | 256K | 최극 압축, 256GB 클러스터 | 4개 |
-| **GLM-5.2 IQ2_M** | 744B | 2-bit | 245GB | 256K | 고품질 압축, 상세 추론 | 5개 |
-| **GLM-5.2 IQ3_XXS** | 744B | 3-bit | 110GB | 256K | 균형, 단일 128GB | 7개 |
-| **Gemma 4 31B** (Multi-Instance) | 31B | Q4_K_XL | 20GB/인스턴스 | 45K | 데이터 병렬화, 4중 인스턴스 + LiteLLM | 1개 |
-| **Gemma 4 E4B** | 4B/8B | Q4_K_M | 7-8GB | 131K | 초경량, 풀 GPU | 1개 |
-| **Gemma 4 26B A4B** | 26B | Q4_K_M | 16GB | 256K | MoE 혼합, GPU | 1개 |
-| **Qwen 3.6 35B A3B** | 35B | Q4_0 | 19GB | 256K | MoE 고급 | 1개 |
-| **DeepSeek-Coder-V2** (Long-Doc) | 236B | Q4_K_S | 60-65GB | 164K | MoE 코딩 특화, 장문서 분석 | 7개 |
-
-**LLaMA.cpp와 SGLang 두 가지 추론 엔진 지원**
-
-**GLM-5.2** (744B, 40B 활성 파라미터):
-- **HuggingFace**: https://huggingface.co/unsloth/GLM-5.2-GGUF (unsloth GGUF 버전)
-- **양자화 옵션**: IQ1_S (1-bit, 223GB), IQ2_M (2-bit, 245GB), IQ3_XXS (3-bit, 110GB)
-- **256GB 클러스터 환경**: IQ1_S 권장 (메모리 효율적, 33GB 여유)
-
-**DeepSeek-Coder-V2** (236B, 21B 활성 파라미터):
-- **HuggingFace**: https://huggingface.co/bullerwins/DeepSeek-Coder-V2-Instruct-GGUF (GGUF 변환)
-- **양자화**: Q4_K_S (60-65GB, 7개 파일)
-- **컨텍스트**: 164K 토큰 (Gemma 4 31B의 3배)
-- **특징**: 코딩 특화, MoE 구조 (6/6 experts), 장문서 분석 최적화
-- **256GB 클러스터**: 3-4개 인스턴스 + LiteLLM 라운드로빈
-
-### 💎 선택적 liteLLM 프록시 레이어
-```
-클라이언트 → liteLLM (:4000) → llama.cpp (:8080)
-```
-
-**liteLLM의 이점**:
-- ✅ **클라이언트 설정 고정**: 모델 변경해도 항상 `:4000`으로 연결
-- ✅ **시맨틱 캐싱**: 유사한 질문에 즉시 응답
-- ✅ **Web UI 대시보드**: `http://localhost:4000/ui`에서 요청 모니터링
-- ✅ **요청 로깅**: 모든 요청/응답 자동 기록
-
-### 🛡️ 완벽한 에러 처리
-- Docker 오류 시 명확한 에러 메시지
-- liteLLM 실패 시 llama.cpp는 계속 실행
-- 모델 파일 미존재 시 에러 + 메뉴 재진입
-- 사용자 취소 시 정상 종료
+로컬 하드웨어(GPU VRAM, CPU, RAM, Disk)를 자동으로 감지하여 **Hugging Face Unsloth GGUF 최적 모델(TOP 10)**을 추천하고, **PostgreSQL DB**를 통해 모델 카탈로그, 다운로드 이력, 서버 수명주기 로그, LiteLLM 다중 사용자 및 사용량 감사 로그를 영구 관리하는 로컬 LLM 통합 플랫폼입니다.
 
 ---
 
-## 📋 요구사항
+## 🌟 주요 기능
 
-### 필수
+### 🖥️ 하드웨어 자동 감지 & Unsloth 모델 추천
+- **실시간 하드웨어 프로파일링**: GPU 모델, VRAM 크기(가용량), CPU 코어수, 시스템 RAM, 디스크 여유 공간 자동 감지
+- **Unsloth GGUF TOP 10 추천**: VRAM 100% 오프로드 가능 여부 및 GPU+CPU MoE 하이브리드 적합도를 자동 계산하여 최적 모델 10종 선별
+- **자동 다운로드 & 즉시 실행**: TUI 메뉴 또는 단축 번호(`1~10`) 선택 시 Hugging Face에서 고속 스트리밍 다운로드 후 Docker 컨테이너 자동 구동
+
+### 🐘 PostgreSQL 기반 통합 데이터 관리 (Docker 동일 네트워크)
+- **Hugging Face 모델 카탈로그 (`hf_model_catalog`)**: 추천 모델 메타데이터(양자화, 크기, 권장 VRAM, 파라미터 등) DB 자동 동기화
+- **모델 다운로드 이력 (`model_downloads`)**: 다운로드 상태(`DOWNLOADING`/`COMPLETED`/`FAILED`), 다운로드 속도(MB/s), 소요 시간, 파일 크기 영구 보관
+- **서버 런타임 수명주기 (`server_runtime_logs`)**: 컨테이너 시작/정상종료/에러 상태, GPU 오프로드 프로파일, 가동 시간(분) 추적
+- **LiteLLM 사용자 및 사용량 감사 (`LiteLLM_UserTable`, `LiteLLM_SpendLogs`)**: 사용자별 API Key 발급 및 토큰 사용량(Prompt/Completion), 지연시간(Latency) DB 실시간 적재
+
+### 💎 LiteLLM 프록시 & 다중 사용자 관리
+- **OpenAI 호환 API**: `:4000/v1` 엔드포인트 제공 (`/v1/chat/completions`, `/v1/models` 등)
+- **다중 사용자 및 API Key 발급**: 사용자별 독립된 API Key 및 월간 예산(`max_budget`) 한도 설정 지원
+- **Web UI 대시보드**: `http://localhost:4000/ui`에서 실시간 모니터링
+- **시맨틱 캐싱**: 동일/유사 질의 캐시를 통한 초고속 응답
+
+---
+
+## 🚀 빠른 시작 (Quick Start)
+
+### 1️⃣ 환경 설정 및 초기 실행
+```bash
+# 저장소 클론 및 이동
+git clone https://github.com/tsis-mobile-technology/localLLMService.git
+cd localLLMService
+
+# 환경 변수 템플릿 복사
+cp .env.example .env
+
+# 실행 권한 부여
+chmod +x docker_run.sh docker_stop.sh
+```
+
+### 2️⃣ 대화형 TUI 메뉴로 실행
+```bash
+./docker_run.sh
+```
+- 메뉴에서 `1`~`10`번 모델을 선택하면 다운로드 및 컨테이너 구동이 일괄 진행됩니다.
+- 서브 메뉴:
+  - `U`: LiteLLM 사용자 계정 및 API Key 목록 조회
+  - `S`: LiteLLM 토큰 소비 및 요청 통계 조회
+  - `H`: 모델 다운로드 및 서버 런타임 이력 조회
+
+### 3️⃣ 단축 번호로 즉시 실행
+```bash
+./docker_run.sh 1    # 1위 추천 모델(Qwen3.5 9B) 즉시 구동
+```
+
+### 4️⃣ CLI 실시간 통계 및 이력 조회
+```bash
+./docker_run.sh --stats     # LiteLLM 토큰 소비량 및 평균 레이턴시 통계
+./docker_run.sh --users     # 등록된 사용자 및 활성 API Key 목록
+./docker_run.sh --history   # 모델 다운로드 및 서버 구동/종료 이력
+./docker_run.sh --env       # 감지된 PC 하드웨어 환경 상세
+./docker_run.sh --list      # 추천 모델 TOP 10 전체 목록 출력
+```
+
+### 5️⃣ 서비스 정상 종료
+```bash
+./docker_stop.sh
+# LLaMA.cpp 및 LiteLLM 컨테이너를 정상 종료하며, DB에 STOPPED 상태와 가동 시간을 기록합니다.
+# (PostgreSQL 데이터 보존을 위해 DB 컨테이너는 유지됩니다)
+```
+
+---
 - **Docker** (with NVIDIA GPU support)
 - **Docker Compose** (선택사항)
 - **whiptail** (TUI 메뉴용)

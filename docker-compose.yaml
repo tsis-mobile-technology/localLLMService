@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: litellm-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-litellm}
+      POSTGRES_USER: ${POSTGRES_USER:-llm_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-llm_secret_pass}
+      TZ: "Asia/Seoul"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    networks:
+      - local-llm-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-llm_admin} -d ${POSTGRES_DB:-litellm}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+networks:
+  local-llm-net:
+    name: local-llm-net
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: local_llm_postgres_data
