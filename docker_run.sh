@@ -541,6 +541,15 @@ launch_model() {
         whiptail --title "❌ Docker 컨테이너 구동 실패" \
             --msgbox "Docker 실행 중 아래 오류가 발생했습니다:\n\n$docker_output\n\n$guide" \
             20 80
+	# launch_model 함수 내부의 docker run 직후에 추가
+	sleep 2
+	if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+		echo "❌ llama.cpp 컨테이너가 시작 직후 비정상 종료되었습니다."
+		echo "【컨테이너 에러 로그】"
+		docker logs "$CONTAINER_NAME"
+		docker rm -f "$CONTAINER_NAME" &>/dev/null || true
+		return 1
+	fi
         return 1
     fi
 

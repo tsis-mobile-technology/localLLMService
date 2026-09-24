@@ -23,6 +23,7 @@ except ImportError:
 MODELS_DIR_DEFAULT = os.path.expanduser("~/Projects/models")
 
 # Curated High-Quality Unsloth GGUF Models with verified Hugging Face CDN links
+#"args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
 UNSLOTH_CATALOG = [
     {
         "id": "qwen3.5-9b",
@@ -38,7 +39,7 @@ UNSLOTH_CATALOG = [
         "category": "고지능 범용",
         "desc": "Alibaba 최신 9B 초고성능 모델 / 32K context 지원 / 범용 최상급",
         "base_priority": 100,
-        "args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
+        "args": "-ngl 99 -c 32768 --flash-attn on -ctk q8_0 -ctv q8_0 -b 2048 -ub 512"
     },
     {
         "id": "deepseek-r1-7b",
