@@ -12,7 +12,10 @@ services:
       TZ: "Asia/Seoul"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - ./init_restore.sh:/docker-entrypoint-initdb.d/01_restore.sh:ro
+      - ./init_db.sql:/docker-entrypoint-initdb.d/02_init_db.sql:ro
+      - ./backups:/backups
+
     networks:
       - local-llm-net
     healthcheck:

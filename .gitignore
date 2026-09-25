@@ -32,3 +32,8 @@ litellm_config.yaml
 
 # Logs
 *.log
+
+# Database Backups
+backups/*.sql
+!backups/.gitkeep
+

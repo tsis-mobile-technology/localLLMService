@@ -74,10 +74,12 @@ ensure_infrastructure() {
     fi
 
     # 2. Ensure PostgreSQL is running
+    local was_down=false
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${POSTGRES_CONTAINER}$"; then
+        was_down=true
         echo "📦 PostgreSQL 서비스 기동 중 (docker compose up -d postgres)..."
         (cd "$SCRIPT_DIR" && docker compose up -d postgres &>/dev/null || true)
-        local retries=10
+        local retries=15
         while [ $retries -gt 0 ]; do
             if docker exec "$POSTGRES_CONTAINER" pg_isready -U llm_admin -d litellm &>/dev/null; then
                 break
@@ -85,6 +87,15 @@ ensure_infrastructure() {
             sleep 1
             retries=$((retries - 1))
         done
+    fi
+
+    # 3. Check for automatic restore if database is empty but backup exists
+    if [ -f "$DB_MANAGER" ]; then
+        local restore_res
+        restore_res=$(python3 "$DB_MANAGER" auto_restore 2>/dev/null || echo "")
+        if echo "$restore_res" | grep -q "AUTO_RESTORED"; then
+            echo "✅ 백업된 PostgreSQL 데이터를 성공적으로 복구했습니다."
+        fi
     fi
 }
 
@@ -379,6 +390,29 @@ if not rts:
         18 80
 }
 
+show_backup_restore_view() {
+    local bchoice
+    bchoice=$(whiptail --title "💾 PostgreSQL 백업 및 복원 관리" \
+        --menu "원하는 작업을 선택하세요:" 15 65 3 \
+        "1" "💾 지금 즉시 데이터베이스 백업 생성" \
+        "2" "🔄 최신 백업본(litellm_backup_latest.sql) 복구" \
+        "3" "취소 (메인 메뉴로 돌아가기)" \
+        3>&1 1>&2 2>&3) || return 0
+
+    if [ "$bchoice" = "1" ]; then
+        local b_out
+        b_out=$(python3 "$DB_MANAGER" backup 2>&1 || true)
+        whiptail --title "💾 DB 백업 결과" --msgbox "$b_out" 12 70
+    elif [ "$bchoice" = "2" ]; then
+        if whiptail --title "⚠️ DB 복원 확인" \
+            --yesno "최신 백업 파일로부터 데이터베이스를 복구하시겠습니까?\n\n기존 데이터가 백업 시점의 상태로 덮어씌워질 수 있습니다." 12 65; then
+            local r_out
+            r_out=$(python3 "$DB_MANAGER" restore 2>&1 || true)
+            whiptail --title "🔄 DB 복원 결과" --msgbox "$r_out" 12 70
+        fi
+    fi
+}
+
 # --- UI & Model Selection ----------------------------------------------------
 
 show_model_menu() {
@@ -404,6 +438,8 @@ show_model_menu() {
     menu_items+=("U" "[👥 사용자] LiteLLM 사용자 계정 및 API Key 목록 조회")
     menu_items+=("S" "[📊 통계] LiteLLM 토큰 소비 및 요청 로그 통계")
     menu_items+=("H" "[📜 이력] 모델 다운로드 및 서버 실행 이력 조회")
+    menu_items+=("B" "[💾 백업/복원] PostgreSQL DB 수동 백업 및 복구 관리")
+
 
     local choice
     choice=$(whiptail \
@@ -631,6 +667,17 @@ main() {
         exit 0
     fi
 
+    if [ "${1:-}" = "--backup" ]; then
+        python3 "$DB_MANAGER" backup "${2:-}"
+        exit 0
+    fi
+
+    if [ "${1:-}" = "--restore" ]; then
+        python3 "$DB_MANAGER" restore "${2:-}"
+        exit 0
+    fi
+
+
     # Direct launch by number (e.g. ./docker_run.sh 1)
     if [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
         local direct_choice="$1"
@@ -665,6 +712,9 @@ main() {
             continue
         elif [ "$choice" = "H" ]; then
             show_history_view
+            continue
+        elif [ "$choice" = "B" ]; then
+            show_backup_restore_view
             continue
         fi
 

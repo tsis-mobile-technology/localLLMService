@@ -15,12 +15,18 @@ import sys
 import os
 import json
 import shlex
+import shutil
 import subprocess
 from datetime import datetime
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+BACKUPS_DIR = SCRIPT_DIR / "backups"
 
 CONTAINER_NAME = os.environ.get("POSTGRES_CONTAINER", "litellm-postgres")
 DB_USER = os.environ.get("POSTGRES_USER", "llm_admin")
 DB_NAME = os.environ.get("POSTGRES_DB", "litellm")
+
 
 
 class DBManager:
@@ -331,6 +337,142 @@ class DBManager:
         res["models"] = by_model
         return res
 
+    # --- 5. Backup & Restore Operations --------------------------------------
+
+    def backup_database(self, backup_dir=None, prefix="litellm_backup"):
+        """
+        Dumps the PostgreSQL database to a timestamped .sql file and updates the latest.sql copy.
+        Returns: (success: bool, latest_file: Path, timestamp_file: Path, size_bytes: int, message: str)
+        """
+        if not self.is_available():
+            return False, None, None, 0, "PostgreSQL 컨테이너가 실행 중이지 않거나 준비되지 않았습니다."
+
+        target_dir = Path(backup_dir) if backup_dir else BACKUPS_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts_file = target_dir / f"{prefix}_{now_str}.sql"
+        latest_file = target_dir / f"{prefix}_latest.sql"
+
+        cmd = [
+            "docker", "exec", self.container_name,
+            "pg_dump", "-U", self.user, "-d", self.dbname,
+            "--clean", "--if-exists", "--no-owner", "--no-privileges"
+        ]
+
+        try:
+            res = self._run_cmd(cmd, timeout=90)
+            if res.returncode != 0:
+                err_msg = res.stderr.strip() or "pg_dump 실행 중 에러가 발생했습니다."
+                return False, None, None, 0, f"백업 실패: {err_msg}"
+
+            sql_output = res.stdout
+            if not sql_output.strip():
+                return False, None, None, 0, "백업 결과 데이터가 비어 있습니다."
+
+            with open(ts_file, "w", encoding="utf-8") as f:
+                f.write(sql_output)
+
+            shutil.copy2(ts_file, latest_file)
+            size = ts_file.stat().st_size
+
+            return True, latest_file, ts_file, size, "백업이 성공적으로 완료되었습니다."
+        except Exception as e:
+            return False, None, None, 0, f"백업 중 예외 발생: {e}"
+
+    def restore_database(self, backup_file=None):
+        """
+        Restores the database from a given SQL dump file. Defaults to backups/litellm_backup_latest.sql.
+        Returns: (success: bool, restored_tables: int, message: str)
+        """
+        if not self.is_available():
+            return False, 0, "PostgreSQL 컨테이너가 실행 중이지 않거나 준비되지 않았습니다."
+
+        target_file = Path(backup_file) if backup_file else (BACKUPS_DIR / "litellm_backup_latest.sql")
+        if not target_file.exists():
+            return False, 0, f"백업 파일을 찾을 수 없습니다: {target_file}"
+
+        if target_file.stat().st_size == 0:
+            return False, 0, f"백업 파일 크기가 0바이트입니다: {target_file}"
+
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
+                sql_content = f.read()
+
+            cmd = [
+                "docker", "exec", "-i", self.container_name,
+                "psql", "-U", self.user, "-d", self.dbname,
+                "-v", "ON_ERROR_STOP=0", "-q"
+            ]
+            res = self._run_cmd(cmd, input_data=sql_content, timeout=120)
+
+            tables_res = self.query_json("SELECT count(*) as count FROM information_schema.tables WHERE table_schema='public';")
+            count = int(tables_res[0].get("count", 0)) if tables_res else 0
+
+            if count > 0:
+                return True, count, f"데이터베이스가 성공적으로 복원되었습니다 (총 {count}개 테이블)."
+            else:
+                return False, 0, f"복원은 완료되었으나 복원된 테이블이 없습니다: {res.stderr}"
+        except Exception as e:
+            return False, 0, f"복원 중 예외 발생: {e}"
+
+    def _has_table(self, table_name):
+        """Helper to check if a specific table exists."""
+        try:
+            res = self.query_json(
+                f"SELECT (to_regclass('public.\"{table_name}\"') IS NOT NULL OR to_regclass('public.{table_name}') IS NOT NULL) as exists;"
+            )
+            return bool(res and res[0].get("exists"))
+        except Exception:
+            return False
+
+    def is_database_empty(self):
+        """
+        Checks if the database has no user/application data.
+        Returns True if empty or structure-only without data.
+        """
+        if not self.is_available():
+            return False
+        try:
+            tables = self.query_json("SELECT count(*) as count FROM information_schema.tables WHERE table_schema='public';")
+            cnt = int(tables[0].get("count", 0)) if tables else 0
+            if cnt == 0:
+                return True
+
+            c_count = 0
+            if self._has_table("hf_model_catalog"):
+                res = self.query_json("SELECT count(*) as count FROM hf_model_catalog;")
+                c_count = int(res[0].get("count", 0)) if res else 0
+
+            u_count = 0
+            if self._has_table("LiteLLM_UserTable"):
+                res = self.query_json('SELECT count(*) as count FROM "LiteLLM_UserTable";')
+                u_count = int(res[0].get("count", 0)) if res else 0
+
+            return (c_count == 0 and u_count == 0)
+        except Exception:
+            return True
+
+    def auto_restore_if_empty(self, backup_file=None):
+        """
+        Restores database only if current DB is empty and a valid backup file exists.
+        Returns: (success: bool, status_code: str)
+        """
+        if not self.is_available():
+            return False, "DB_NOT_AVAILABLE"
+
+        target_file = Path(backup_file) if backup_file else (BACKUPS_DIR / "litellm_backup_latest.sql")
+        if not target_file.exists() or target_file.stat().st_size == 0:
+            return False, "NO_BACKUP_FILE"
+
+        if not self.is_database_empty():
+            return True, "SKIPPED_ALREADY_HAS_DATA"
+
+        ok, count, msg = self.restore_database(target_file)
+        if ok:
+            return True, f"AUTO_RESTORED_{count}_TABLES"
+        return False, f"RESTORE_FAILED: {msg}"
+
 
 def main():
     db = DBManager()
@@ -349,7 +491,33 @@ def main():
         print(json.dumps(db.get_users_summary(), indent=2, ensure_ascii=False))
     elif cmd == "stats":
         print(json.dumps(db.get_token_usage_stats(), indent=2, ensure_ascii=False))
+    elif cmd == "backup":
+        out_dir = sys.argv[2] if len(sys.argv) > 2 else None
+        ok, latest, ts, size, msg = db.backup_database(out_dir)
+        if ok:
+            size_mb = size / (1024 * 1024)
+            print(f"✅ 백업 완료: {latest} ({size_mb:.2f} MB, 타임스탬프: {ts.name})")
+            sys.exit(0)
+        else:
+            print(f"❌ 백업 실패: {msg}", file=sys.stderr)
+            sys.exit(1)
+    elif cmd == "restore":
+        bfile = sys.argv[2] if len(sys.argv) > 2 else None
+        ok, count, msg = db.restore_database(bfile)
+        if ok:
+            print(f"✅ 복구 완료: {count}개 테이블 복원됨 ({msg})")
+            sys.exit(0)
+        else:
+            print(f"❌ 복구 실패: {msg}", file=sys.stderr)
+            sys.exit(1)
+    elif cmd == "is_empty":
+        print("EMPTY" if db.is_database_empty() else "POPULATED")
+    elif cmd == "auto_restore":
+        ok, status = db.auto_restore_if_empty()
+        print(f"AUTO_RESTORE_RESULT: {status}")
+        sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
     main()
+
