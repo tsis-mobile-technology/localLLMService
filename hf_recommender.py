@@ -22,6 +22,59 @@ except ImportError:
 
 MODELS_DIR_DEFAULT = os.path.expanduser("~/Projects/models")
 
+# Local Custom Models (Fine-tuned, LoRA Adapter, and Base)
+LOCAL_MODELS = [
+    {
+        "id": "local-gemma-4-e4b-ft",
+        "repo": "local/finetuned",
+        "name": "[LOCAL / 병합] Gemma 4 E4B IT - Finetuned",
+        "filename": "gemma-4-E4B-it-ft-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 5.0,
+        "min_vram_gb": 5.5,
+        "recommended_vram_gb": 6.5,
+        "type": "dense",
+        "active_params": "4B",
+        "category": "로컬 파인튜닝",
+        "desc": "파인튜닝 가중치 병합 완제품 모델",
+        "base_priority": 1000,
+        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "local-gemma-4-e4b-lora",
+        "repo": "local/lora",
+        "name": "[LOCAL / LoRA] Gemma 4 E4B IT + Adapter",
+        "filename": "gemma-4-E4B-it-base-Q4_K_M.gguf",
+        "lora_file": "gemma-4-E4B-it-lora-f16.gguf",
+        "quant": "Q4_K_M + f16",
+        "size_gb": 5.07,
+        "min_vram_gb": 5.5,
+        "recommended_vram_gb": 6.5,
+        "type": "dense",
+        "active_params": "4B",
+        "category": "로컬 파인튜닝",
+        "desc": "순정 베이스에 LoRA 어댑터 결합 로드",
+        "base_priority": 990,
+        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "local-gemma-4-e4b-base",
+        "repo": "local/base",
+        "name": "[LOCAL / 순정] Gemma 4 E4B IT Base",
+        "filename": "gemma-4-E4B-it-base-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 5.0,
+        "min_vram_gb": 5.5,
+        "recommended_vram_gb": 6.5,
+        "type": "dense",
+        "active_params": "4B",
+        "category": "로컬 베이스",
+        "desc": "순정 베이스 모델 (비교 대조군)",
+        "base_priority": 980,
+        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    }
+]
+
 # Curated High-Quality Unsloth GGUF Models with verified Hugging Face CDN links
 #"args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
 UNSLOTH_CATALOG = [
@@ -300,20 +353,36 @@ def score_and_rank_models(hw, models_dir):
     Ranks models based on hardware compatibility:
     - 100% GPU Offload: Model + KV cache <= VRAM
     - GPU+CPU MoE: Active params fit in VRAM, full weights fit in RAM
-    - Returns top 10 models with computed install status
+    - Returns local models and top HF models with computed install status
     """
     vram = hw["gpu"]["total_vram_gb"]
     ram_avail = hw["ram"]["avail_gb"]
     is_gpu = hw["gpu"]["count"] > 0
 
+    all_catalog = LOCAL_MODELS + UNSLOTH_CATALOG
     scored = []
-    for m in UNSLOTH_CATALOG:
+    for m in all_catalog:
         m_copy = dict(m)
         full_path = os.path.join(models_dir, m_copy["filename"])
-        m_copy["is_downloaded"] = os.path.isfile(full_path)
+        
+        # Check LoRA adapter existence if specified
+        is_lora = bool(m_copy.get("lora_file"))
+        if is_lora:
+            lora_path = os.path.join(models_dir, m_copy["lora_file"])
+            m_copy["is_downloaded"] = os.path.isfile(full_path) and os.path.isfile(lora_path)
+        else:
+            m_copy["is_downloaded"] = os.path.isfile(full_path)
+
+        # Skip local models if files are not present in models_dir
+        if m_copy.get("repo", "").startswith("local/") and not m_copy["is_downloaded"]:
+            continue
+
         if m_copy["is_downloaded"]:
             try:
-                m_copy["local_size_gb"] = round(os.path.getsize(full_path) / (1024 ** 3), 2)
+                sz = os.path.getsize(full_path)
+                if is_lora:
+                    sz += os.path.getsize(lora_path)
+                m_copy["local_size_gb"] = round(sz / (1024 ** 3), 2)
             except OSError:
                 m_copy["local_size_gb"] = m_copy["size_gb"]
         else:
@@ -352,7 +421,7 @@ def score_and_rank_models(hw, models_dir):
 
     # Sort descending by score
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:10]
+    return scored[:13]
 
 
 def format_whiptail_menu_items(models):
@@ -530,11 +599,11 @@ def main():
         disk_txt = f"{hw['disk']['free_gb']}GB"
         print(f"🖥️ GPU: {gpu_txt} │ RAM: {ram_txt}\n💻 CPU: {cpu_txt} │ 💾 저장소 여유: {disk_txt}")
 
-    # 4. Recommend TOP 10 models (JSON)
+    # 4. Recommend models (JSON)
     elif cmd == "recommend":
         if DBManager:
             db = DBManager()
-            db.sync_catalog(UNSLOTH_CATALOG)
+            db.sync_catalog(LOCAL_MODELS + UNSLOTH_CATALOG)
         hw = detect_hardware()
         top10 = score_and_rank_models(hw, models_dir)
         print(json.dumps(top10, ensure_ascii=False, indent=2))
@@ -543,7 +612,7 @@ def main():
     elif cmd == "whiptail-menu":
         if DBManager:
             db = DBManager()
-            db.sync_catalog(UNSLOTH_CATALOG)
+            db.sync_catalog(LOCAL_MODELS + UNSLOTH_CATALOG)
         hw = detect_hardware()
         top10 = score_and_rank_models(hw, models_dir)
         items = format_whiptail_menu_items(top10)
@@ -577,6 +646,13 @@ def main():
                 print(f"Error: Invalid index {target}")
                 sys.exit(1)
             model = top10[idx]
+            if model.get("repo", "").startswith("local/"):
+                if model.get("is_downloaded", False):
+                    print(f"✅ 로컬 모델 파일이 이미 준비되어 있습니다: {model['filename']}")
+                    sys.exit(0)
+                else:
+                    print(f"❌ 로컬 모델 파일({model['filename']})을 찾을 수 없습니다. {models_dir} 경로에 배치해주세요.")
+                    sys.exit(1)
             mid = model["id"]
             repo = model["repo"]
             filename = model["filename"]

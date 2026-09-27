@@ -445,7 +445,7 @@ show_model_menu() {
     choice=$(whiptail \
         --title "🦙 Unsloth GGUF 모델 추천 & 실행 (PostgreSQL 통합 플랫폼)" \
         --menu "서비스 상태: $status_line\n$env_summary\n\n모델을 선택하세요 ([✓ 보유] 즉시구동, [⬇ 다운] 선택 시 자동 다운로드 후 구동):" \
-        31 115 13 \
+        33 118 16 \
         "${menu_items[@]}" \
         3>&1 1>&2 2>&3) || return 1
 
@@ -457,18 +457,23 @@ confirm_and_prepare_model() {
     local model_info
     model_info=$(python3 "$RECOMMENDER" get-model "$choice")
 
-    local name filename size_gb is_dl offload_tag desc
+    local name filename size_gb is_dl offload_tag desc lora_file
     name=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$model_info")
     filename=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['filename'])" "$model_info")
     size_gb=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['size_gb'])" "$model_info")
     is_dl=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(str(d['is_downloaded']).lower())" "$model_info")
     offload_tag=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['offload_tag'])" "$model_info")
     desc=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['desc'])" "$model_info")
+    lora_file=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('lora_file', ''))" "$model_info")
 
     if [ "$is_dl" = "true" ]; then
+        local lora_info=""
+        if [ -n "$lora_file" ]; then
+            lora_info="\n• LoRA 어댑터: $lora_file (동시 결합 로드)"
+        fi
         whiptail --title "🚀 모델 구동 확인" \
-            --yesno "선택한 모델이 로컬에 이미 준비되어 있습니다.\n\n• 모델명: $name\n• 파일명: $filename\n• 크기: ${size_gb} GB\n• 적합도: [$offload_tag]\n• 저장 경로: $MODELS_DIR/$filename\n• 서비스 포트: http://localhost:$PORT\n\n이 모델로 컨테이너를 구동하시겠습니까?" \
-            16 75
+            --yesno "선택한 모델이 로컬에 이미 준비되어 있습니다.\n\n• 모델명: $name\n• 파일명: $filename${lora_info}\n• 크기: ${size_gb} GB\n• 적합도: [$offload_tag]\n• 저장 경로: $MODELS_DIR/$filename\n• 서비스 포트: http://localhost:$PORT\n\n이 모델로 컨테이너를 구동하시겠습니까?" \
+            17 75
         return $?
     else
         if whiptail --title "📥 모델 다운로드 및 구동 확인" \
@@ -503,11 +508,12 @@ launch_model() {
     local model_info
     model_info=$(python3 "$RECOMMENDER" get-model "$choice")
 
-    local mid filename extra_args offload_tag
+    local mid filename extra_args offload_tag lora_file
     mid=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('id', ''))" "$model_info")
     filename=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['filename'])" "$model_info")
     extra_args=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('args', ''))" "$model_info")
     offload_tag=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('offload_tag', ''))" "$model_info")
+    lora_file=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('lora_file', ''))" "$model_info")
 
     local gpu_info
     gpu_info=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(f\"{d['gpu']['count']},{d['gpu']['total_vram_gb']},{d['gpu']['name']}\")" "$(python3 "$RECOMMENDER" env)")
@@ -541,6 +547,10 @@ launch_model() {
     fi
 
     local model_arg="-m /models/$filename"
+    if [ -n "$lora_file" ]; then
+        model_arg="$model_arg --lora /models/$lora_file"
+        echo "🔗 LoRA 어댑터 결합 로드: /models/$lora_file"
+    fi
 
     echo "🚀 Docker 컨테이너 실행 중 ($CONTAINER_NAME)..."
     local docker_output
@@ -590,11 +600,15 @@ launch_model() {
     fi
 
     # Record server launch in PostgreSQL
+    local log_fn="$filename"
+    if [ -n "$lora_file" ]; then
+        log_fn="$filename (+LoRA: $lora_file)"
+    fi
     python3 -c "
 from db_manager import DBManager
 db = DBManager()
 if db.is_available():
-    db.log_server_start('$CONTAINER_NAME', '$mid', '$filename', $PORT, '$offload_tag', '$gpu_name')
+    db.log_server_start('$CONTAINER_NAME', '$mid', '$log_fn', $PORT, '$offload_tag', '$gpu_name')
 " 2>/dev/null || true
 }
 
@@ -602,8 +616,10 @@ show_launch_success() {
     local choice="$1"
     local model_info
     model_info=$(python3 "$RECOMMENDER" get-model "$choice")
-    local name
+    local name filename lora_file
     name=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$model_info")
+    filename=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['filename'])" "$model_info")
+    lora_file=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('lora_file', ''))" "$model_info")
 
     local litellm_status litellm_msg
     litellm_status=$(get_litellm_status)
@@ -621,9 +637,14 @@ show_launch_success() {
         mode_msg="\n[모드]: 100% GPU 가속 (CUDA)"
     fi
 
+    local lora_msg=""
+    if [ -n "$lora_file" ]; then
+        lora_msg="\n• 베이스 모델: $filename\n• LoRA 어댑터: $lora_file (결합 구동)"
+    fi
+
     whiptail --title "✅ 실행 성공 (PostgreSQL 연동 완료)" \
-        --yesno "LLaMA.cpp 및 서비스가 성공적으로 실행되었습니다!\n\n• 모델:       $name\n• llama.cpp: http://localhost:$PORT\n• PostgreSQL: 🟢 DB 저장 연동 완료 (포트 $POSTGRES_PORT)${mode_msg}${litellm_msg}\n\n컨테이너 실시간 로그를 확인하시겠습니까?\n(종료하려면 Ctrl+C)" \
-        19 78 \
+        --yesno "LLaMA.cpp 및 서비스가 성공적으로 실행되었습니다!\n\n• 모델:       $name${lora_msg}\n• llama.cpp: http://localhost:$PORT\n• PostgreSQL: 🟢 DB 저장 연동 완료 (포트 $POSTGRES_PORT)${mode_msg}${litellm_msg}\n\n컨테이너 실시간 로그를 확인하시겠습니까?\n(종료하려면 Ctrl+C)" \
+        20 78 \
         --yes-button "Tail Logs" --no-button "Exit"
 }
 
@@ -685,11 +706,18 @@ main() {
         echo ""
         echo "선택 모델 ID: $direct_choice"
         if ! python3 "$RECOMMENDER" get-model "$direct_choice" &>/dev/null; then
-            echo "❌ 잘못된 모델 번호입니다 (1-10 사이 입력)."
+            echo "❌ 잘못된 모델 번호입니다."
             exit 1
         fi
 
-        python3 "$RECOMMENDER" download "$direct_choice"
+        local direct_model_info is_dl
+        direct_model_info=$(python3 "$RECOMMENDER" get-model "$direct_choice")
+        is_dl=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(str(d.get('is_downloaded', False)).lower())" "$direct_model_info")
+
+        if [ "$is_dl" != "true" ]; then
+            python3 "$RECOMMENDER" download "$direct_choice"
+        fi
+
         stop_existing_container
         launch_model "$direct_choice"
         generate_litellm_config

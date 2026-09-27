@@ -9,12 +9,20 @@
 ### 🖥️ 하드웨어 자동 감지 & Unsloth 모델 추천
 - **실시간 하드웨어 프로파일링**: GPU 모델, VRAM 크기(가용량), CPU 코어수, 시스템 RAM, 디스크 여유 공간 자동 감지
 - **Unsloth GGUF TOP 10 추천**: VRAM 100% 오프로드 가능 여부 및 GPU+CPU MoE 하이브리드 적합도를 자동 계산하여 최적 모델 10종 선별
-- **자동 다운로드 & 즉시 실행**: TUI 메뉴 또는 단축 번호(`1~10`) 선택 시 Hugging Face에서 고속 스트리밍 다운로드 후 Docker 컨테이너 자동 구동
+- **자동 다운로드 & 즉시 실행**: TUI 메뉴 또는 단축 번호 선택 시 Hugging Face에서 고속 스트리밍 다운로드 후 Docker 컨테이너 자동 구동
+
+### 🧬 로컬 파인튜닝 & LoRA 어댑터 결합 지원 (NEW!)
+- **로컬 커스텀 모델 자동 감지**: `~/Projects/models/` 경로 내 GGUF 파일 자동 스캔 및 메뉴 최우선 노출
+- **Gemma 4 E4B IT 파인튜닝 3단 비교 체계**:
+  - `1. [LOCAL / 병합]`: 파인튜닝 가중치가 병합된 완제품 GGUF 단독 구동 (`gemma-4-E4B-it-ft-Q4_K_M.gguf`)
+  - `2. [LOCAL / LoRA]`: 순정 베이스 모델에 LoRA 어댑터를 동시 결합 구동 (`gemma-4-E4B-it-base-Q4_K_M.gguf` + `gemma-4-E4B-it-lora-f16.gguf` via `--lora`)
+  - `3. [LOCAL / 순정]`: 파인튜닝 전 순정 베이스 모델 구동 (`gemma-4-E4B-it-base-Q4_K_M.gguf`)
+- **원클릭 A/B 비교 테스트**: 메뉴에서 번호 선택만으로 순정 vs LoRA 결합 vs 병합 완제품의 답변 품질 비교 가능
 
 ### 🐘 PostgreSQL 기반 통합 데이터 관리 (Docker 동일 네트워크)
 - **Hugging Face 모델 카탈로그 (`hf_model_catalog`)**: 추천 모델 메타데이터(양자화, 크기, 권장 VRAM, 파라미터 등) DB 자동 동기화
 - **모델 다운로드 이력 (`model_downloads`)**: 다운로드 상태(`DOWNLOADING`/`COMPLETED`/`FAILED`), 다운로드 속도(MB/s), 소요 시간, 파일 크기 영구 보관
-- **서버 런타임 수명주기 (`server_runtime_logs`)**: 컨테이너 시작/정상종료/에러 상태, GPU 오프로드 프로파일, 가동 시간(분) 추적
+- **서버 런타임 수명주기 (`server_runtime_logs`)**: 컨테이너 시작/정상종료/에러 상태, GPU 오프로드 프로파일, 가동 시간(분) 추적 (LoRA 결합 상세 표기)
 - **LiteLLM 사용자 및 사용량 감사 (`LiteLLM_UserTable`, `LiteLLM_SpendLogs`)**: 사용자별 API Key 발급 및 토큰 사용량(Prompt/Completion), 지연시간(Latency) DB 실시간 적재
 
 ### 💎 LiteLLM 프록시 & 다중 사용자 관리
@@ -44,7 +52,7 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ```bash
 ./docker_run.sh
 ```
-- 메뉴에서 `1`~`10`번 모델을 선택하면 다운로드 및 컨테이너 구동이 일괄 진행됩니다.
+- 메뉴 최상단에 로컬 모델(1~3번) 및 하드웨어 최적화 추천 모델들이 표시됩니다.
 - 서브 메뉴:
   - `U`: LiteLLM 사용자 계정 및 API Key 목록 조회
   - `S`: LiteLLM 토큰 소비 및 요청 통계 조회
@@ -53,7 +61,10 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 
 ### 3️⃣ 단축 번호로 즉시 실행
 ```bash
-./docker_run.sh 1    # 1위 추천 모델(Qwen3.5 9B) 즉시 구동
+./docker_run.sh 1    # [LOCAL / 병합] Gemma 4 E4B IT Finetuned 완제품 구동
+./docker_run.sh 2    # [LOCAL / LoRA] Gemma 4 E4B IT Base + LoRA 결합 구동
+./docker_run.sh 3    # [LOCAL / 순정] Gemma 4 E4B IT Base 순정 모델 구동
+./docker_run.sh 4    # Qwen3.5 9B 등 추천 허깅페이스 모델 구동
 ```
 
 ### 4️⃣ CLI 실시간 통계, 이력, 백업 및 복구
@@ -818,12 +829,23 @@ docker logs --tail 100 llama-server
 
 ---
 
-**Last Updated**: 2026-06-26  
-**Version**: 2.1 (Multi-Instance + GLM-5.2 Optimization + DeepSeek-Coder-V2)  
-**Author**: Claude Code  
+**Last Updated**: 2026-09-27  
+**Version**: 2.2 (Local Fine-tuned & LoRA Adapter Support)  
+**Author**: Claude Code & Antigravity  
 **Repository**: https://github.com/tsis-mobile-technology/localLLMService
 
-### 변경사항 (v2.1)
+### 변경사항 (v2.2) - 2026-09-27
+- 🧬 **Gemma 4 E4B IT 로컬 파인튜닝 & LoRA 어댑터 결합 지원**
+  - `[LOCAL / 병합]` Finetuned 모델 (`gemma-4-E4B-it-ft-Q4_K_M.gguf`) 완제품 단독 구동
+  - `[LOCAL / LoRA]` 순정 베이스 + LoRA 어댑터 (`gemma-4-E4B-it-lora-f16.gguf`) 동시 결합 로드 (`--lora` 옵션 자동 바인딩)
+  - `[LOCAL / 순정]` 순정 베이스 모델 (`gemma-4-E4B-it-base-Q4_K_M.gguf`) 비교 대조군 지원
+- 🔍 **로컬 모델 자동 감지 & TUI 최우선순위(1~3번) 배치**
+  - `~/Projects/models/` 내 파일 존재 여부 자동 확인 (LoRA의 경우 베이스+어댑터 동시 검증)
+  - Whiptail 대화형 다이얼로그 및 구동 완료 안내 창에 LoRA 어댑터 결합 상세 정보 노출
+  - CLI 단축 번호(`1`, `2`, `3`) 즉시 실행 지원 (다운로드 스킵 처리)
+  - PostgreSQL 런타임 로그(`server_runtime_logs`)에 LoRA 결합 여부 상세 기록 (`(+LoRA: ...)`)
+
+### 이전 변경사항 (v2.1)
 - 🆕 **DeepSeek-Coder-V2 (164K Context Long-Document Coding)**
   - Q4_K_S 양자화 (60-65GB, 7개 파일)
   - 164K 컨텍스트 (Gemma 4 31B의 3배)
