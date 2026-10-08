@@ -76,7 +76,6 @@ LOCAL_MODELS = [
 ]
 
 # Curated High-Quality Unsloth GGUF Models with verified Hugging Face CDN links
-#"args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
 UNSLOTH_CATALOG = [
     {
         "id": "qwen3.5-9b",
@@ -89,10 +88,106 @@ UNSLOTH_CATALOG = [
         "recommended_vram_gb": 10.0,
         "type": "dense",
         "active_params": "9B",
-        "category": "고지능 범용",
-        "desc": "Alibaba 최신 9B 초고성능 모델 / 32K context 지원 / 범용 최상급",
+        "category": "고지능 범용 (보유)",
+        "desc": "Alibaba 최신 9B 초고성능 모델 / 32K context 지원 / 범용 최상급 검증 완료",
         "base_priority": 100,
         "args": "-ngl 99 -c 32768 --flash-attn on -ctk q8_0 -ctv q8_0 -b 2048 -ub 512"
+    },
+    {
+        "id": "qwen2.5-coder-32b",
+        "repo": "unsloth/Qwen2.5-Coder-32B-Instruct-GGUF",
+        "name": "Qwen2.5-Coder 32B Instruct",
+        "filename": "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 18.49,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "32B",
+        "category": "32B 코딩 종결자",
+        "desc": "Claude 3.5 Sonnet급 오픈소스 코딩 1위 / 18.5GB / GPU+78GB RAM 하이브리드 구동",
+        "base_priority": 98,
+        "args": "-ngl 28 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "deepseek-r1-32b",
+        "repo": "unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF",
+        "name": "DeepSeek-R1-Distill 32B",
+        "filename": "DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 18.49,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "32B",
+        "category": "32B 심층추론 끝판왕",
+        "desc": "DeepSeek-R1 32B 최고봉 CoT 사고 추론 / 수학·알고리즘 극한 성능 / GPU+RAM",
+        "base_priority": 97,
+        "args": "-ngl 28 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "deepseek-r1-14b",
+        "repo": "unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF",
+        "name": "DeepSeek-R1-Distill 14B",
+        "filename": "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 8.37,
+        "min_vram_gb": 10.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "14B",
+        "category": "14B 심층추론 (100% GPU)",
+        "desc": "14B 고지능 R1 추론 / 12GB VRAM 100% 풀로드 한계치 최적화",
+        "base_priority": 96,
+        "args": "-ngl 99 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "qwen2.5-coder-14b",
+        "repo": "unsloth/Qwen2.5-Coder-14B-Instruct-GGUF",
+        "name": "Qwen2.5-Coder 14B Instruct",
+        "filename": "Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 8.37,
+        "min_vram_gb": 10.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "14B",
+        "category": "14B 코딩 최강 (100% GPU)",
+        "desc": "14B 코딩 종결자 / 12GB VRAM 100% GPU 단독 풀로드 초고속 구동",
+        "base_priority": 95,
+        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "phi-4-14b",
+        "repo": "unsloth/phi-4-GGUF",
+        "name": "Phi-4 14B",
+        "filename": "phi-4-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 8.28,
+        "min_vram_gb": 10.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "14B",
+        "category": "14B 수학·추론 (100% GPU)",
+        "desc": "Microsoft 최신 14B 플래그십 / 12GB VRAM 100% GPU 단독 풀 오프로드",
+        "base_priority": 94,
+        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "mistral-small-24b",
+        "repo": "bartowski/Mistral-Small-24B-Instruct-2501-GGUF",
+        "name": "Mistral Small 24B Instruct 2501",
+        "filename": "Mistral-Small-24B-Instruct-2501-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 13.35,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "24B",
+        "category": "24B 고성능 범용",
+        "desc": "Mistral AI 최신 24B (2501) 모델 / 13.4GB / GPU+78GB RAM 분산 고속 추론",
+        "base_priority": 93,
+        "args": "-ngl 22 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
         "id": "deepseek-r1-7b",
@@ -105,9 +200,9 @@ UNSLOTH_CATALOG = [
         "recommended_vram_gb": 8.0,
         "type": "dense",
         "active_params": "7B",
-        "category": "심층 추론",
+        "category": "7B 심층 추론 (100% GPU)",
         "desc": "DeepSeek-R1 수학·코딩 추론 증류 모델 / CoT Thinking 탁월",
-        "base_priority": 95,
+        "base_priority": 92,
         "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
@@ -121,9 +216,9 @@ UNSLOTH_CATALOG = [
         "recommended_vram_gb": 8.0,
         "type": "dense",
         "active_params": "7B",
-        "category": "코딩 특화",
+        "category": "7B 코딩 특화 (100% GPU)",
         "desc": "오픈소스 7B 코딩 최강자 / 코드 자동완성 및 디버깅 최적화",
-        "base_priority": 93,
+        "base_priority": 91,
         "args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
@@ -137,26 +232,26 @@ UNSLOTH_CATALOG = [
         "recommended_vram_gb": 11.0,
         "type": "dense",
         "active_params": "12B",
-        "category": "최신 고성능",
+        "category": "12B 고성능 (100% GPU)",
         "desc": "Google 최신 Gemma 4 12B 모델 / 정밀 지시 추론",
         "base_priority": 90,
         "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
-        "id": "deepseek-r1-14b",
-        "repo": "unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF",
-        "name": "DeepSeek-R1-Distill 14B",
-        "filename": "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf",
-        "quant": "Q4_K_M",
-        "size_gb": 8.37,
-        "min_vram_gb": 10.5,
-        "recommended_vram_gb": 12.0,
+        "id": "llama-3.3-70b",
+        "repo": "unsloth/Llama-3.3-70B-Instruct-GGUF",
+        "name": "Llama 3.3 70B Instruct",
+        "filename": "Llama-3.3-70B-Instruct-UD-IQ3_XXS.gguf",
+        "quant": "IQ3_XXS",
+        "size_gb": 25.76,
+        "min_vram_gb": 10.0,
+        "recommended_vram_gb": 16.0,
         "type": "dense",
-        "active_params": "14B",
-        "category": "14B 심층추론",
-        "desc": "14B 고지능 R1 추론 / 12GB VRAM 100% 풀로드 한계치 최적화",
-        "base_priority": 88,
-        "args": "-ngl 99 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0"
+        "active_params": "70B",
+        "category": "70B 플래그십",
+        "desc": "Meta 최신 70B 모델 / 25.8GB / 78GB RAM 환경에서 안정적 CPU+GPU 하이브리드",
+        "base_priority": 89,
+        "args": "-ngl 18 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
         "id": "qwen3-coder-30b-moe",
@@ -171,72 +266,8 @@ UNSLOTH_CATALOG = [
         "active_params": "3B",
         "category": "MoE 코딩 최강",
         "desc": "1200만 DL 1위! 활성 3B MoE / GPU+대용량 RAM 하이브리드",
-        "base_priority": 85,
+        "base_priority": 88,
         "args": "-ngl 24 --n-cpu-moe 8 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
-    },
-    {
-        "id": "gemma-4-e4b",
-        "repo": "unsloth/gemma-4-E4B-it-GGUF",
-        "name": "Gemma 4 E4B IT",
-        "filename": "gemma-4-E4B-it-Q4_0.gguf",
-        "quant": "Q4_0",
-        "size_gb": 4.50,
-        "min_vram_gb": 5.5,
-        "recommended_vram_gb": 6.5,
-        "type": "dense",
-        "active_params": "4B",
-        "category": "경량 고효율",
-        "desc": "Google Gemma 4 경량 4B 모델 / 낮은 VRAM, 빠른 응답 속도",
-        "base_priority": 82,
-        "args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
-    },
-    {
-        "id": "qwen3.5-4b",
-        "repo": "unsloth/Qwen3.5-4B-GGUF",
-        "name": "Qwen3.5 4B",
-        "filename": "Qwen3.5-4B-Q4_0.gguf",
-        "quant": "Q4_0",
-        "size_gb": 2.41,
-        "min_vram_gb": 4.0,
-        "recommended_vram_gb": 5.0,
-        "type": "dense",
-        "active_params": "4B",
-        "category": "초고속 경량",
-        "desc": "2.4GB 가벼운 크기로 초당 80+ 토큰 초고속 생성",
-        "base_priority": 80,
-        "args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
-    },
-    {
-        "id": "phi-4-mini",
-        "repo": "unsloth/Phi-4-mini-instruct-GGUF",
-        "name": "Phi-4 Mini 3.8B",
-        "filename": "Phi-4-mini-instruct-Q4_K_M.gguf",
-        "quant": "Q4_K_M",
-        "size_gb": 2.32,
-        "min_vram_gb": 4.0,
-        "recommended_vram_gb": 5.0,
-        "type": "dense",
-        "active_params": "3.8B",
-        "category": "MS 고효율",
-        "desc": "Microsoft 고효율 소형 모델 / 128K context 지원",
-        "base_priority": 78,
-        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
-    },
-    {
-        "id": "llama-3.2-3b",
-        "repo": "unsloth/Llama-3.2-3B-Instruct-GGUF",
-        "name": "Llama 3.2 3B",
-        "filename": "Llama-3.2-3B-Instruct-Q4_0.gguf",
-        "quant": "Q4_0",
-        "size_gb": 1.79,
-        "min_vram_gb": 3.0,
-        "recommended_vram_gb": 4.0,
-        "type": "dense",
-        "active_params": "3B",
-        "category": "초경량 일상",
-        "desc": "Meta 경량 3B 모델 / 일상 대화 및 가벼운 어시스턴트용",
-        "base_priority": 75,
-        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
         "id": "gemma-4-26b-a4b",
@@ -251,7 +282,7 @@ UNSLOTH_CATALOG = [
         "active_params": "4B",
         "category": "대형 MoE",
         "desc": "Google Gemma 4 MoE / 활성 4B 파라미터 / GPU+RAM 분산 구동",
-        "base_priority": 72,
+        "base_priority": 85,
         "args": "-ngl 20 --n-cpu-moe 8 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
@@ -267,8 +298,72 @@ UNSLOTH_CATALOG = [
         "active_params": "3B",
         "category": "고지능 MoE",
         "desc": "35B MoE / 활성 3B / 대용량 RAM을 활용한 하이브리드 구동",
-        "base_priority": 70,
+        "base_priority": 84,
         "args": "-ngl 16 --n-cpu-moe 16 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "gemma-4-e4b",
+        "repo": "unsloth/gemma-4-E4B-it-GGUF",
+        "name": "Gemma 4 E4B IT",
+        "filename": "gemma-4-E4B-it-Q4_0.gguf",
+        "quant": "Q4_0",
+        "size_gb": 4.50,
+        "min_vram_gb": 5.5,
+        "recommended_vram_gb": 6.5,
+        "type": "dense",
+        "active_params": "4B",
+        "category": "경량 고효율 (100% GPU)",
+        "desc": "Google Gemma 4 경량 4B 모델 / 낮은 VRAM, 빠른 응답 속도",
+        "base_priority": 80,
+        "args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "qwen3.5-4b",
+        "repo": "unsloth/Qwen3.5-4B-GGUF",
+        "name": "Qwen3.5 4B",
+        "filename": "Qwen3.5-4B-Q4_0.gguf",
+        "quant": "Q4_0",
+        "size_gb": 2.41,
+        "min_vram_gb": 4.0,
+        "recommended_vram_gb": 5.0,
+        "type": "dense",
+        "active_params": "4B",
+        "category": "초고속 경량 (100% GPU)",
+        "desc": "2.4GB 가벼운 크기로 초당 80+ 토큰 초고속 생성",
+        "base_priority": 78,
+        "args": "-ngl 99 -c 32768 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "phi-4-mini",
+        "repo": "unsloth/Phi-4-mini-instruct-GGUF",
+        "name": "Phi-4 Mini 3.8B",
+        "filename": "Phi-4-mini-instruct-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 2.32,
+        "min_vram_gb": 4.0,
+        "recommended_vram_gb": 5.0,
+        "type": "dense",
+        "active_params": "3.8B",
+        "category": "MS 고효율 (100% GPU)",
+        "desc": "Microsoft 고효율 소형 모델 / 128K context 지원",
+        "base_priority": 75,
+        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "llama-3.2-3b",
+        "repo": "unsloth/Llama-3.2-3B-Instruct-GGUF",
+        "name": "Llama 3.2 3B",
+        "filename": "Llama-3.2-3B-Instruct-Q4_0.gguf",
+        "quant": "Q4_0",
+        "size_gb": 1.79,
+        "min_vram_gb": 3.0,
+        "recommended_vram_gb": 4.0,
+        "type": "dense",
+        "active_params": "3B",
+        "category": "초경량 일상 (100% GPU)",
+        "desc": "Meta 경량 3B 모델 / 일상 대화 및 가벼운 어시스턴트용",
+        "base_priority": 70,
+        "args": "-ngl 99 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
     }
 ]
 
@@ -398,15 +493,19 @@ def score_and_rank_models(hw, models_dir):
                 score = base_score + 30
             elif m_copy["type"] == "moe" and (m_copy["size_gb"] < ram_avail):
                 # MoE offloading to RAM
-                m_copy["offload_tag"] = "GPU+CPU"
-                score = base_score + 10
+                m_copy["offload_tag"] = "GPU+CPU (MoE)"
+                score = base_score + 18
             elif m_copy["size_gb"] <= vram + 4.0:
                 # Partial GPU offload
                 m_copy["offload_tag"] = "GPU+CPU"
-                score = base_score + 5
+                score = base_score + 15
+            elif m_copy["size_gb"] < ram_avail:
+                # High-capacity system RAM offload (e.g. 78GB RAM)
+                m_copy["offload_tag"] = "GPU+대용량RAM"
+                score = base_score + 12
             else:
-                m_copy["offload_tag"] = "GPU+CPU"
-                score = base_score - 10
+                m_copy["offload_tag"] = "RAM초과"
+                score = base_score - 20
         else:
             # CPU only
             m_copy["offload_tag"] = "CPU-Only"
@@ -414,14 +513,14 @@ def score_and_rank_models(hw, models_dir):
 
         # Bonus if already downloaded
         if m_copy["is_downloaded"]:
-            score += 25
+            score += 35
 
         m_copy["score"] = score
         scored.append(m_copy)
 
     # Sort descending by score
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:13]
+    return scored[:20]
 
 
 def format_whiptail_menu_items(models):

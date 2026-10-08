@@ -1,14 +1,14 @@
 # 🦙 Local LLM Service Platform - LLaMA.cpp + liteLLM + PostgreSQL
 
-로컬 하드웨어(GPU VRAM, CPU, RAM, Disk)를 자동으로 감지하여 **Hugging Face Unsloth GGUF 최적 모델(TOP 10)**을 추천하고, **PostgreSQL DB**를 통해 모델 카탈로그, 다운로드 이력, 서버 수명주기 로그, LiteLLM 다중 사용자 및 사용량 감사 로그를 영구 관리하는 로컬 LLM 통합 플랫폼입니다.
+로컬 하드웨어(GPU VRAM, CPU, RAM, Disk)를 자동으로 감지하여 **Hugging Face GGUF 최적 모델(TOP 20)**을 추천하고, **PostgreSQL DB**를 통해 모델 카탈로그, 다운로드 이력, 서버 수명주기 로그, LiteLLM 다중 사용자 및 사용량 감사 로그를 영구 관리하는 로컬 LLM 통합 플랫폼입니다.
 
 ---
 
 ## 🌟 주요 기능
 
-### 🖥️ 하드웨어 자동 감지 & Unsloth 모델 추천
+### 🖥️ 하드웨어 자동 감지 & 최신 모델 추천
 - **실시간 하드웨어 프로파일링**: GPU 모델, VRAM 크기(가용량), CPU 코어수, 시스템 RAM, 디스크 여유 공간 자동 감지
-- **Unsloth GGUF TOP 10 추천**: VRAM 100% 오프로드 가능 여부 및 GPU+CPU MoE 하이브리드 적합도를 자동 계산하여 최적 모델 10종 선별
+- **하드웨어 최적화 GGUF TOP 20 추천**: VRAM 100% 오프로드 가능 여부 및 GPU+78GB RAM 하이브리드 적합도를 자동 계산하여 최적 모델 20종 선별
 - **자동 다운로드 & 즉시 실행**: TUI 메뉴 또는 단축 번호 선택 시 Hugging Face에서 고속 스트리밍 다운로드 후 Docker 컨테이너 자동 구동
 
 ### 🧬 로컬 파인튜닝 & LoRA 어댑터 결합 지원 (NEW!)
@@ -75,7 +75,7 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ./docker_run.sh --backup    # PostgreSQL DB 즉시 백업 (backups/ 저장)
 ./docker_run.sh --restore   # 최신 백업본으로부터 DB 데이터 복원
 ./docker_run.sh --env       # 감지된 PC 하드웨어 환경 상세
-./docker_run.sh --list      # 추천 모델 TOP 10 전체 목록 출력
+./docker_run.sh --list      # 추천 모델 TOP 20 전체 목록 출력
 ```
 
 ### 5️⃣ 서비스 정상 종료 및 자동 백업/복원

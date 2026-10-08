@@ -530,7 +530,7 @@ launch_model() {
         threads="8"
     else
         shm_size="32g"
-        memory_limit="48g"
+        memory_limit="56g"
         threads="10"
     fi
 
@@ -662,7 +662,7 @@ main() {
     if [ "${1:-}" = "--list" ]; then
         python3 "$RECOMMENDER" env-detail
         echo ""
-        echo "📋 추천 Unsloth GGUF 모델 TOP 10:"
+        echo "📋 추천 GGUF 모델 TOP 20:"
         python3 "$RECOMMENDER" recommend | jq -r '.[] | "• \(.name) (\(.size_gb)GB) [\(.offload_tag)] - \(.category): \(.desc) (다운로드 여부: \(.is_downloaded))"'
         exit 0
     fi
