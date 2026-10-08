@@ -24,6 +24,15 @@ set -euo pipefail
 # ============================================================================
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load environment configuration from .env if present
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
 readonly MODELS_DIR="${MODELS_DIR:-$HOME/Projects/models}"
 export MODELS_DIR
 mkdir -p "$MODELS_DIR"
@@ -413,6 +422,36 @@ show_backup_restore_view() {
     fi
 }
 
+show_hf_account_view() {
+    local hf_json text
+    hf_json=$(python3 "$RECOMMENDER" hf-status 2>/dev/null || echo "{}")
+    text=$(python3 -c "
+import json, sys
+data = json.loads(sys.argv[1])
+if data.get('authenticated'):
+    pro_str = ' (PRO 유료 플랜)' if data.get('is_pro') else ' (무료 플랜)'
+    print(f'🟢 계정 인증 상태 : 인증 성공 (@{data.get(\"username\")})')
+    if data.get('fullname'):
+        print(f'• 사용자 이름   : {data.get(\"fullname\")}')
+    if data.get('email'):
+        print(f'• 등록된 이메일 : {data.get(\"email\")}')
+    print(f'• 구독 플랜     : {data.get(\"plan\")}{pro_str}')
+    print('• 고속 CDN 전용 가속 및 Gated 모델 다운로드 권한 활성화됨')
+elif data.get('configured'):
+    print(f'❌ 계정 인증 실패: {data.get(\"message\")}')
+    print('• .env 파일의 HF_TOKEN 값을 올바르게 설정해주세요.')
+else:
+    print('ℹ️ Hugging Face 익명 다운로드 모드')
+    print('• .env 파일에 HF_TOKEN을 설정하시면 더 빠른 전용 CDN 속도와')
+    print('  Gated 모델(라이선스 동의 모델) 다운로드가 가능합니다.')
+    print('• 토큰 발급 링크 : https://huggingface.co/settings/tokens (Read 권한 권장)')
+" "$hf_json")
+
+    whiptail --title "🤗 Hugging Face API 연동 상태" \
+        --msgbox "$text\n\n[설정 파일]: $SCRIPT_DIR/.env" \
+        18 80
+}
+
 # --- UI & Model Selection ----------------------------------------------------
 
 show_model_menu() {
@@ -435,6 +474,7 @@ show_model_menu() {
     mapfile -t menu_items < <(python3 -c "import json, sys; [print(x) for x in json.loads(sys.argv[1])]" "$menu_json")
 
     # Add management actions
+    menu_items+=("K" "[🤗 계정] Hugging Face API 토큰 및 계정 연동 상태 확인")
     menu_items+=("U" "[👥 사용자] LiteLLM 사용자 계정 및 API Key 목록 조회")
     menu_items+=("S" "[📊 통계] LiteLLM 토큰 소비 및 요청 로그 통계")
     menu_items+=("H" "[📜 이력] 모델 다운로드 및 서버 실행 이력 조회")
@@ -546,6 +586,11 @@ launch_model() {
         echo "ℹ️  NVIDIA Container Toolkit 미설치로 인해 CPU 모드로 구동합니다."
     fi
 
+    local hf_token_env=()
+    if [ -n "${HF_TOKEN:-}" ]; then
+        hf_token_env+=(-e "HF_TOKEN=$HF_TOKEN")
+    fi
+
     local model_arg="-m /models/$filename"
     if [ -n "$lora_file" ]; then
         model_arg="$model_arg --lora /models/$lora_file"
@@ -557,6 +602,7 @@ launch_model() {
     if ! docker_output=$(docker run -d --name "$CONTAINER_NAME" \
         --network "$DOCKER_NETWORK" \
         ${gpu_args[@]+"${gpu_args[@]}"} \
+        ${hf_token_env[@]+"${hf_token_env[@]}"} \
         --cap-add IPC_LOCK \
         --cap-add SYS_ADMIN \
         --ulimit memlock=-1:-1 \
@@ -654,6 +700,11 @@ main() {
     check_prerequisites
 
     # CLI options
+    if [ "${1:-}" = "--hf-check" ]; then
+        python3 "$RECOMMENDER" hf-check
+        exit 0
+    fi
+
     if [ "${1:-}" = "--env" ]; then
         python3 "$RECOMMENDER" env-detail
         exit 0
@@ -732,7 +783,10 @@ main() {
         choice=$(show_model_menu) || exit 0
 
         # Handle management views
-        if [ "$choice" = "U" ]; then
+        if [ "$choice" = "K" ]; then
+            show_hf_account_view
+            continue
+        elif [ "$choice" = "U" ]; then
             show_users_view
             continue
         elif [ "$choice" = "S" ]; then

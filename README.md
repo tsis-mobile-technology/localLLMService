@@ -19,6 +19,12 @@
   - `3. [LOCAL / 순정]`: 파인튜닝 전 순정 베이스 모델 구동 (`gemma-4-E4B-it-base-Q4_K_M.gguf`)
 - **원클릭 A/B 비교 테스트**: 메뉴에서 번호 선택만으로 순정 vs LoRA 결합 vs 병합 완제품의 답변 품질 비교 가능
 
+### 🤗 Hugging Face API 인증 & 초고속 안정 다운로드 (NEW!)
+- **공식 API 및 고속 CDN 스트리밍**: Hugging Face API 토큰(`HF_TOKEN`)을 통한 전용 CDN 가속 및 익명 요청 제한(Rate-Limit / Connection Reset) 완전 해제
+- **Gated Model(라이선스 동의 모델) 지원**: Meta Llama 3.3, Google Gemma 등 HF 라이선스 동의 모델도 인증 헤더를 통해 끊김 없이 다운로드
+- **Pre-flight 권한 선제 검증**: 다운로드 개시 전 토큰 유효성(401), Gated 권한(403), 파일 존재 여부(404)를 사전 검증하여 안전성 확보
+- **간편한 `.env` 설정 & 진단 CLI**: `.env`에 `HF_TOKEN` 입력 시 TUI 메뉴(`K`) 또는 `./docker_run.sh --hf-check`로 계정 등급 및 연동 상태 즉시 확인
+
 ### 🐘 PostgreSQL 기반 통합 데이터 관리 (Docker 동일 네트워크)
 - **Hugging Face 모델 카탈로그 (`hf_model_catalog`)**: 추천 모델 메타데이터(양자화, 크기, 권장 VRAM, 파라미터 등) DB 자동 동기화
 - **모델 다운로드 이력 (`model_downloads`)**: 다운로드 상태(`DOWNLOADING`/`COMPLETED`/`FAILED`), 다운로드 속도(MB/s), 소요 시간, 파일 크기 영구 보관
@@ -44,6 +50,14 @@ cd localLLMService
 # 환경 변수 템플릿 복사
 cp .env.example .env
 
+# Hugging Face 토큰 설정 (https://huggingface.co/settings/tokens 에서 Read 권한 발급)
+# .env 파일에 아래 항목을 입력합니다:
+#   HF_TOKEN=hf_your_token_here
+#   HF_USERNAME=your_username
+
+# Hugging Face API 인증 상태 점검
+./docker_run.sh --hf-check
+
 # 실행 권한 부여
 chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ```
@@ -54,6 +68,7 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ```
 - 메뉴 최상단에 로컬 모델(1~3번) 및 하드웨어 최적화 추천 모델들이 표시됩니다.
 - 서브 메뉴:
+  - `K`: Hugging Face API 토큰 및 계정 연동 상태 확인 (NEW!)
   - `U`: LiteLLM 사용자 계정 및 API Key 목록 조회
   - `S`: LiteLLM 토큰 소비 및 요청 통계 조회
   - `H`: 모델 다운로드 및 서버 런타임 이력 조회
@@ -69,6 +84,7 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 
 ### 4️⃣ CLI 실시간 통계, 이력, 백업 및 복구
 ```bash
+./docker_run.sh --hf-check  # Hugging Face API 연동 상태 및 계정 확인
 ./docker_run.sh --stats     # LiteLLM 토큰 소비량 및 평균 레이턴시 통계
 ./docker_run.sh --users     # 등록된 사용자 및 활성 API Key 목록
 ./docker_run.sh --history   # 모델 다운로드 및 서버 구동/종료 이력

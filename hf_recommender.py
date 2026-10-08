@@ -20,6 +20,143 @@ try:
 except ImportError:
     DBManager = None
 
+
+def load_dotenv(env_path=None):
+    """Loads key-value pairs from .env into os.environ if not already present."""
+    if env_path is None:
+        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.isfile(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k and k not in os.environ:
+                        os.environ[k] = v
+    except Exception:
+        pass
+
+
+# Automatically load .env at module import
+load_dotenv()
+
+
+def get_hf_credentials():
+    """Extracts Hugging Face credentials and configuration from environment."""
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_API_KEY")
+    username = os.environ.get("HF_USERNAME")
+    endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    return {
+        "token": token.strip() if token else None,
+        "username": username.strip() if username else None,
+        "endpoint": endpoint
+    }
+
+
+def get_hf_account_info(token=None):
+    """Queries Hugging Face API (whoami-v2) to verify account and token validity."""
+    creds = get_hf_credentials()
+    tok = token or creds["token"]
+    if not tok:
+        return {
+            "configured": False,
+            "authenticated": False,
+            "username": None,
+            "fullname": None,
+            "email": None,
+            "plan": None,
+            "is_pro": False,
+            "message": "HF_TOKEN이 .env에 설정되지 않았습니다 (익명 다운로드 모드)."
+        }
+
+    url = f"{creds['endpoint']}/api/whoami-v2"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {tok}",
+        "User-Agent": "localLLMService/1.0 (huggingface-api)"
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return {
+                "configured": True,
+                "authenticated": True,
+                "username": data.get("name", creds.get("username")),
+                "fullname": data.get("fullname", ""),
+                "email": data.get("email", ""),
+                "plan": data.get("plan", "Free"),
+                "is_pro": data.get("isPro", False),
+                "message": f"계정 인증 성공: {data.get('name')} ({data.get('fullname', '')})"
+            }
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return {
+                "configured": True,
+                "authenticated": False,
+                "username": None,
+                "fullname": None,
+                "email": None,
+                "plan": None,
+                "is_pro": False,
+                "message": "인증 실패: .env의 HF_TOKEN이 유효하지 않습니다."
+            }
+        return {
+            "configured": True,
+            "authenticated": False,
+            "username": None,
+            "fullname": None,
+            "email": None,
+            "plan": None,
+            "is_pro": False,
+            "message": f"Hugging Face API 응답 오류 (HTTP {e.code})"
+        }
+    except Exception as e:
+        return {
+            "configured": True,
+            "authenticated": False,
+            "username": None,
+            "fullname": None,
+            "email": None,
+            "plan": None,
+            "is_pro": False,
+            "message": f"Hugging Face API 연결 실패: {e}"
+        }
+
+
+def check_hf_model_access(url, token=None):
+    """
+    Performs pre-flight HEAD request via Hugging Face API to verify file existence and permissions.
+    Returns (can_access: bool, error_message: str, http_code: int).
+    """
+    creds = get_hf_credentials()
+    tok = token or creds["token"]
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "localLLMService/1.0 (huggingface-api)"
+    }, method="HEAD")
+    if tok:
+        req.add_header("Authorization", f"Bearer {tok}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return True, "", resp.status
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Hugging Face 인증 실패: .env 파일의 HF_TOKEN이 유효하지 않거나 권한이 없습니다.", 401
+        elif e.code == 403:
+            return False, "Hugging Face 접근 제한: 해당 모델은 라이선스 동의(Gated Model)가 필요합니다. HF 웹사이트에서 접근 동의를 받아주세요.", 403
+        elif e.code == 404:
+            return False, "Hugging Face 저장소에서 모델 파일을 찾을 수 없습니다 (404 Not Found).", 404
+        return False, f"Hugging Face API HTTP 에러 ({e.code}): {e.reason}", e.code
+    except Exception as e:
+        # Network errors are handled during actual download
+        return True, "", 0
+
+
 MODELS_DIR_DEFAULT = os.path.expanduser("~/Projects/models")
 
 # Local Custom Models (Fine-tuned, LoRA Adapter, and Base)
@@ -541,6 +678,7 @@ def print_detailed_environment(hw):
     cpu = hw["cpu"]
     ram = hw["ram"]
     disk = hw["disk"]
+    hf_info = get_hf_account_info()
 
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("🖥️  시스템 구동 환경 감지 결과 (Hardware Profile):")
@@ -555,6 +693,14 @@ def print_detailed_environment(hw):
     print(f"• CPU 모델  : {cpu['model']} ({cpu['cores']} vCPU)")
     print(f"• 시스템 RAM: 전체 {ram['total_gb']} GB │ 현재 가용 {ram['avail_gb']} GB")
     print(f"• 모델저장소: {disk['models_dir']} (디스크 여유 공간: {disk['free_gb']} GB)")
+
+    if hf_info["authenticated"]:
+        pro_tag = " [PRO]" if hf_info.get("is_pro") else ""
+        print(f"• HF 계정   : @{hf_info['username']}{pro_tag} (🟢 API 연동 완료 / 고속 CDN 가속 활성)")
+    elif hf_info["configured"]:
+        print(f"• HF 계정   : ⚠️ {hf_info['message']}")
+    else:
+        print(f"• HF 계정   : 미설정 (익명 모드 │ .env에 HF_TOKEN 설정 시 전용 CDN 가속 및 게이티드 모델 지원)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 
@@ -564,6 +710,7 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
     Supports resuming interrupted downloads.
     Primary engine: high-speed curl with automatic retry, timeout recovery, and HTTP/2.
     Fallback engine: robust chunked urllib with automatic retry loop (up to 10 attempts).
+    Uses Hugging Face API authentication (HF_TOKEN) if configured in .env for maximum bandwidth and access.
     Logs start, progress, and completion to PostgreSQL via db_manager.
     """
     db = DBManager() if DBManager else None
@@ -577,10 +724,27 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
             total_bytes=int(expected_size_gb * (1024**3))
         )
 
+    creds = get_hf_credentials()
+    hf_token = creds["token"]
+
     tmp_path = dest_path + ".download"
     initial_bytes = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
 
     print(f"\n🌐 Hugging Face CDN 연결 중: {url}")
+    if hf_token:
+        account_info = get_hf_account_info(hf_token)
+        account_label = f"@{account_info['username']}" if account_info["authenticated"] else "HF_TOKEN 활성"
+        print(f"🔑 Hugging Face API 인증 적용 ({account_label}) - 전용 CDN 가속 및 Rate-Limit 해제 활성화")
+        # Pre-flight access check
+        can_access, access_err, code = check_hf_model_access(url, token=hf_token)
+        if not can_access:
+            print(f"\n❌ {access_err}")
+            if db and download_id:
+                db.log_download_failed(download_id, access_err)
+            return False
+    else:
+        print("ℹ️ 익명 다운로드 모드 (Hugging Face 토큰 미설정 - .env의 HF_TOKEN으로 고속 인증 활성화 가능)")
+
     if initial_bytes > 0:
         print(f"🔄 이어받기 시작: {initial_bytes / (1024**3):.2f} GB 부터 이어서 다운로드합니다.")
 
@@ -600,11 +764,15 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
             "--connect-timeout", "30",
             "--speed-time", "60",
             "--speed-limit", "1024",
-            "-H", "User-Agent: Mozilla/5.0 (compatible; localLLMService/1.0)",
+            "-H", "User-Agent: localLLMService/1.0 (huggingface-api)",
             "--progress-bar",
             "-o", tmp_path,
             url
         ]
+        if hf_token:
+            cmd.insert(12, "-H")
+            cmd.insert(13, f"Authorization: Bearer {hf_token}")
+
         try:
             res = subprocess.run(cmd)
             cur_size = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
@@ -632,8 +800,10 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
     for attempt in range(1, max_retries + 1):
         cur_initial = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
         req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; localLLMService/1.0)"
+            "User-Agent": "localLLMService/1.0 (huggingface-api)"
         })
+        if hf_token:
+            req.add_header("Authorization", f"Bearer {hf_token}")
         if cur_initial > 0:
             req.add_header("Range", f"bytes={cur_initial}-")
 
@@ -723,7 +893,7 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: hf_recommender.py [env|env-detail|env-summary|recommend|whiptail-menu|get-model|download]")
+        print("Usage: hf_recommender.py [env|env-detail|env-summary|recommend|whiptail-menu|get-model|download|hf-status|hf-check]")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -743,11 +913,13 @@ def main():
     # 3. Formatted environment summary for whiptail
     elif cmd == "env-summary":
         hw = detect_hardware()
+        hf_info = get_hf_account_info()
         gpu_txt = f"{hw['gpu']['name']} ({hw['gpu']['total_vram_gb']}GB VRAM / 가용 {hw['gpu']['free_vram_gb']}GB)" if hw['gpu']['count'] > 0 else "CPU Only"
         ram_txt = f"{hw['ram']['total_gb']}GB (가용 {hw['ram']['avail_gb']}GB)"
         cpu_txt = f"{hw['cpu']['model'].split('@')[0].strip()} ({hw['cpu']['cores']}코어)"
         disk_txt = f"{hw['disk']['free_gb']}GB"
-        print(f"🖥️ GPU: {gpu_txt} │ RAM: {ram_txt}\n💻 CPU: {cpu_txt} │ 💾 저장소 여유: {disk_txt}")
+        hf_tag = f"🤗 HF: @{hf_info['username']}" if hf_info["authenticated"] else "🤗 HF: 익명"
+        print(f"🖥️ GPU: {gpu_txt} │ RAM: {ram_txt}\n💻 CPU: {cpu_txt} │ 💾 저장소 여유: {disk_txt} │ {hf_tag}")
 
     # 4. Recommend models (JSON)
     elif cmd == "recommend":
@@ -820,6 +992,48 @@ def main():
 
         success = download_file(url, dest, expected_size, model_id=mid)
         sys.exit(0 if success else 1)
+
+    # 8. Hugging Face account status (JSON)
+    elif cmd == "hf-status":
+        info = get_hf_account_info()
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+
+    # 9. Hugging Face account check (Console text)
+    elif cmd == "hf-check":
+        info = get_hf_account_info()
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("🤗 Hugging Face API 연동 상태 점검:")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        print(f"• .env 파일 위치 : {env_file}")
+        creds = get_hf_credentials()
+        tok = creds["token"]
+        if tok:
+            masked = tok[:6] + "*" * (len(tok) - 10) + tok[-4:] if len(tok) > 10 else "******"
+            print(f"• 토큰 설정 여부 : 설정됨 ({masked})")
+        else:
+            print(f"• 토큰 설정 여부 : ⚠️ 미설정 (익명 모드)")
+
+        if info["authenticated"]:
+            pro_str = " (PRO 유료 플랜)" if info.get("is_pro") else " (무료 플랜)"
+            print(f"• 계정 인증 상태 : 🟢 인증 성공 (@{info['username']})")
+            if info.get("fullname"):
+                print(f"• 사용자 이름   : {info['fullname']}")
+            if info.get("email"):
+                print(f"• 등록된 이메일 : {info['email']}")
+            print(f"• 구독 플랜     : {info['plan']}{pro_str}")
+            print(f"• 다운로드 혜택 : 전용 고속 CDN 가속 및 Gated 모델 접근 지원")
+        elif info["configured"]:
+            print(f"• 계정 인증 상태 : ❌ {info['message']}")
+            print(f"• 조치 안내     : .env 파일의 HF_TOKEN 값을 올바른 토큰으로 수정해주세요.")
+            print(f"• 토큰 발급 링크 : https://huggingface.co/settings/tokens")
+        else:
+            print(f"• 계정 인증 상태 : ℹ️ 익명 다운로드 모드")
+            print(f"• 설정 방법     : .env 파일에 아래 설정을 입력하시면 고속 인증이 활성화됩니다:")
+            print(f"                   HF_TOKEN=hf_your_access_token_here")
+            print(f"                   HF_USERNAME=your_username")
+            print(f"• 토큰 발급 링크 : https://huggingface.co/settings/tokens (Read 권한 권장)")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 
 if __name__ == "__main__":
