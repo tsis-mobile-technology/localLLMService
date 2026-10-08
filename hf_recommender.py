@@ -562,6 +562,8 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
     """
     Downloads file with real-time speed, ETA, and progress display.
     Supports resuming interrupted downloads.
+    Primary engine: high-speed curl with automatic retry, timeout recovery, and HTTP/2.
+    Fallback engine: robust chunked urllib with automatic retry loop (up to 10 attempts).
     Logs start, progress, and completion to PostgreSQL via db_manager.
     """
     db = DBManager() if DBManager else None
@@ -576,98 +578,147 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
         )
 
     tmp_path = dest_path + ".download"
-    initial_bytes = 0
-
-    if os.path.exists(tmp_path):
-        initial_bytes = os.path.getsize(tmp_path)
-
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (compatible; localLLMService/1.0)"
-    })
-    if initial_bytes > 0:
-        req.add_header("Range", f"bytes={initial_bytes}-")
+    initial_bytes = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
 
     print(f"\n🌐 Hugging Face CDN 연결 중: {url}")
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            content_range = resp.headers.get("Content-Range")
-            total_bytes = None
-            if content_range:
-                try:
-                    total_bytes = int(content_range.split("/")[-1])
-                except Exception:
-                    pass
-            if total_bytes is None:
-                cl = resp.headers.get("Content-Length")
-                if cl:
-                    total_bytes = int(cl) + initial_bytes
+    if initial_bytes > 0:
+        print(f"🔄 이어받기 시작: {initial_bytes / (1024**3):.2f} GB 부터 이어서 다운로드합니다.")
 
-            mode = "ab" if initial_bytes > 0 else "wb"
-            downloaded = initial_bytes
-            start_time = time.time()
-            last_print = 0
-            chunk_size = 1024 * 512  # 512 KB
+    start_time = time.time()
 
-            total_display_gb = (total_bytes / (1024**3)) if total_bytes else expected_size_gb
-            print(f"📦 다운로드 대상: {os.path.basename(dest_path)} (총 {total_display_gb:.2f} GB)")
-            if initial_bytes > 0:
-                print(f"🔄 이어받기 시작: {initial_bytes / (1024**3):.2f} GB 부터 이어서 다운로드합니다.")
+    # 1. Primary Engine: High-Speed Curl (HTTP/2, auto-reconnect, 30~50+ MB/s)
+    if shutil.which("curl"):
+        print(f"⚡ 고속 가속 다운로더(curl) 가동 (최대 10회 자동 재연결/재시도 보장)...")
+        cmd = [
+            "curl",
+            "-f", "-L",
+            "-C", "-",
+            "--retry", "10",
+            "--retry-delay", "3",
+            "--retry-max-time", "0",
+            "--retry-all-errors",
+            "--connect-timeout", "30",
+            "--speed-time", "60",
+            "--speed-limit", "1024",
+            "-H", "User-Agent: Mozilla/5.0 (compatible; localLLMService/1.0)",
+            "--progress-bar",
+            "-o", tmp_path,
+            url
+        ]
+        try:
+            res = subprocess.run(cmd)
+            cur_size = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
+            # Success code 0, or 33 (range not satisfiable if file already complete)
+            if res.returncode == 0 or (res.returncode == 33 and cur_size >= int(expected_size_gb * (1024**3) * 0.95)):
+                duration_sec = max(1, int(time.time() - start_time))
+                downloaded_now = max(0, cur_size - initial_bytes)
+                speed_mb = (downloaded_now / (duration_sec * 1024 * 1024)) if downloaded_now > 0 else 0
+                print("\n✨ 다운로드 완료! 파일 검증 및 저장 중...")
+                shutil.move(tmp_path, dest_path)
+                print(f"✅ 저장 완료: {dest_path}")
+                if db and download_id:
+                    db.log_download_complete(download_id, cur_size, speed_mb, duration_sec)
+                return True
+            else:
+                print(f"\n⚠️ curl 종료 코드 ({res.returncode}), 표준 스트리밍 다운로더로 전환하여 재시도합니다...")
+        except Exception as e:
+            print(f"\n⚠️ curl 실행 중 오류 ({e}), 표준 스트리밍 다운로더로 전환합니다...")
 
-            with open(tmp_path, mode) as out_f:
-                while True:
-                    chunk = resp.read(chunk_size)
-                    if not chunk:
-                        break
-                    out_f.write(chunk)
-                    downloaded += len(chunk)
+    # 2. Resilient Python urllib loop with automatic retry and resume
+    max_retries = 10
+    timeout_sec = 60
+    chunk_size = 1024 * 1024  # 1 MB chunk
 
-                    now = time.time()
-                    if now - last_print >= 0.25:
-                        elapsed = now - start_time
-                        speed = (downloaded - initial_bytes) / elapsed if elapsed > 0 else 0
-                        speed_mb = speed / (1024 * 1024)
-                        cur_gb = downloaded / (1024 ** 3)
+    for attempt in range(1, max_retries + 1):
+        cur_initial = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; localLLMService/1.0)"
+        })
+        if cur_initial > 0:
+            req.add_header("Range", f"bytes={cur_initial}-")
 
-                        if total_bytes and total_bytes > 0:
-                            percent = int(downloaded * 100 / total_bytes)
-                            remaining_bytes = max(0, total_bytes - downloaded)
-                            eta_sec = int(remaining_bytes / speed) if speed > 0 else 0
-                            eta_m, eta_s = divmod(eta_sec, 60)
-                            bar_len = 30
-                            filled = int(bar_len * percent / 100)
-                            bar = "=" * filled + (">" if filled < bar_len else "") + " " * (bar_len - filled - (1 if filled < bar_len else 0))
-                            sys.stdout.write(f"\r📥 [{bar}] {percent:3d}% | {cur_gb:5.2f}/{total_display_gb:.2f} GB | {speed_mb:5.1f} MB/s | ETA {eta_m:02d}:{eta_s:02d} ")
-                        else:
-                            sys.stdout.write(f"\r📥 {cur_gb:5.2f} GB 완료 | {speed_mb:5.1f} MB/s")
-                        sys.stdout.flush()
-                        last_print = now
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                content_range = resp.headers.get("Content-Range")
+                total_bytes = None
+                if content_range:
+                    try:
+                        total_bytes = int(content_range.split("/")[-1])
+                    except Exception:
+                        pass
+                if total_bytes is None:
+                    cl = resp.headers.get("Content-Length")
+                    if cl:
+                        total_bytes = int(cl) + cur_initial
 
-            duration_sec = int(time.time() - start_time)
-            speed_mb = (downloaded - initial_bytes) / (duration_sec * 1024 * 1024) if duration_sec > 0 else 0
-            print("\n✨ 다운로드 완료! 파일 검증 및 저장 중...")
-            shutil.move(tmp_path, dest_path)
-            print(f"✅ 저장 완료: {dest_path}")
+                mode = "ab" if cur_initial > 0 else "wb"
+                downloaded = cur_initial
+                last_print = 0
+                total_display_gb = (total_bytes / (1024**3)) if total_bytes else expected_size_gb
 
-            if db and download_id:
-                db.log_download_complete(download_id, downloaded, speed_mb, duration_sec)
-            return True
+                print(f"📦 다운로드 대상: {os.path.basename(dest_path)} (총 {total_display_gb:.2f} GB)")
 
-    except urllib.error.HTTPError as e:
-        if e.code == 416 and initial_bytes > 0:
-            shutil.move(tmp_path, dest_path)
-            print(f"✅ 파일이 이미 완전히 다운로드되어 있습니다: {dest_path}")
-            if db and download_id:
-                db.log_download_complete(download_id, initial_bytes, 0, 0)
-            return True
-        print(f"\n❌ 다운로드 HTTP 에러 ({e.code}): {e.reason}")
-        if db and download_id:
-            db.log_download_failed(download_id, f"HTTP Error {e.code}: {e.reason}")
-        return False
-    except Exception as e:
-        print(f"\n❌ 다운로드 실패 ({type(e).__name__}): {e}")
-        if db and download_id:
-            db.log_download_failed(download_id, str(e))
-        return False
+                with open(tmp_path, mode) as out_f:
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        out_f.write(chunk)
+                        downloaded += len(chunk)
+
+                        now = time.time()
+                        if now - last_print >= 0.25:
+                            elapsed = now - start_time
+                            speed = (downloaded - initial_bytes) / elapsed if elapsed > 0 else 0
+                            speed_mb = speed / (1024 * 1024)
+                            cur_gb = downloaded / (1024 ** 3)
+
+                            if total_bytes and total_bytes > 0:
+                                percent = int(downloaded * 100 / total_bytes)
+                                remaining_bytes = max(0, total_bytes - downloaded)
+                                eta_sec = int(remaining_bytes / speed) if speed > 0 else 0
+                                eta_m, eta_s = divmod(eta_sec, 60)
+                                bar_len = 30
+                                filled = int(bar_len * percent / 100)
+                                bar = "=" * filled + (">" if filled < bar_len else "") + " " * (bar_len - filled - (1 if filled < bar_len else 0))
+                                sys.stdout.write(f"\r📥 [{bar}] {percent:3d}% | {cur_gb:5.2f}/{total_display_gb:.2f} GB | {speed_mb:5.1f} MB/s | ETA {eta_m:02d}:{eta_s:02d} ")
+                            else:
+                                sys.stdout.write(f"\r📥 {cur_gb:5.2f} GB 완료 | {speed_mb:5.1f} MB/s")
+                            sys.stdout.flush()
+                            last_print = now
+
+                duration_sec = max(1, int(time.time() - start_time))
+                speed_mb = (downloaded - initial_bytes) / (duration_sec * 1024 * 1024) if duration_sec > 0 else 0
+                print("\n✨ 다운로드 완료! 파일 검증 및 저장 중...")
+                shutil.move(tmp_path, dest_path)
+                print(f"✅ 저장 완료: {dest_path}")
+
+                if db and download_id:
+                    db.log_download_complete(download_id, downloaded, speed_mb, duration_sec)
+                return True
+
+        except urllib.error.HTTPError as e:
+            if e.code == 416 and cur_initial > 0:
+                shutil.move(tmp_path, dest_path)
+                print(f"✅ 파일이 이미 완전히 다운로드되어 있습니다: {dest_path}")
+                if db and download_id:
+                    db.log_download_complete(download_id, cur_initial, 0, 0)
+                return True
+            print(f"\n❌ 다운로드 HTTP 에러 ({e.code}): {e.reason}")
+            if attempt == max_retries:
+                if db and download_id:
+                    db.log_download_failed(download_id, f"HTTP Error {e.code}: {e.reason}")
+                return False
+        except Exception as e:
+            print(f"\n⚠️ 일시적 네트워크 지연/끊김 ({type(e).__name__}: {e}) - {attempt}/{max_retries} 재시도 준비 중...")
+            if attempt == max_retries:
+                print(f"\n❌ 최대 재시도 횟수 초과로 다운로드 실패: {e}")
+                if db and download_id:
+                    db.log_download_failed(download_id, str(e))
+                return False
+            time.sleep(3)
+
+    return False
 
 
 def main():
