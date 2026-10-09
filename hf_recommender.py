@@ -14,6 +14,8 @@ import subprocess
 import urllib.request
 import urllib.error
 import time
+import struct
+import re
 
 try:
     from db_manager import DBManager
@@ -504,6 +506,220 @@ UNSLOTH_CATALOG = [
     }
 ]
 
+# GGUF Binary Protocol Definition & Type Sizes (v2/v3 Specification)
+GGUF_TYPE_SIZE = {
+    0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8
+}
+
+GGUF_FILE_TYPE_MAP = {
+    0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1",
+    7: "Q8_0", 8: "Q5_0", 9: "Q5_1",
+    10: "Q2_K", 11: "Q3_K_S", 12: "Q3_K_M", 13: "Q3_K_L",
+    14: "Q4_K_S", 15: "Q4_K_M", 16: "Q5_K_S", 17: "Q5_K_M",
+    18: "Q6_K", 19: "IQ2_XXS", 20: "IQ2_XS", 21: "Q2_K_S",
+    22: "IQ3_XS", 23: "IQ3_XXS", 24: "IQ1_S", 25: "IQ4_NL",
+    26: "IQ3_S", 27: "IQ3_M", 28: "IQ2_S", 29: "IQ2_M",
+    30: "IQ4_XS", 31: "IQ1_M", 32: "BF16"
+}
+
+
+def parse_gguf_metadata(filepath):
+    """
+    Parses GGUF binary v2/v3 header and metadata KV pairs in pure Python (zero dependency).
+    Returns dict containing header info and all string/numeric metadata.
+    """
+    info = {"valid": False, "metadata": {}, "tensor_count": 0, "kv_count": 0}
+    try:
+        with open(filepath, "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return info
+            info["valid"] = True
+            version = struct.unpack("<I", f.read(4))[0]
+            info["version"] = version
+            if version >= 2:
+                n_tensors, n_kv = struct.unpack("<QQ", f.read(16))
+            else:
+                n_tensors, n_kv = struct.unpack("<II", f.read(8))
+            info["tensor_count"] = n_tensors
+            info["kv_count"] = n_kv
+
+            meta = {}
+            for _ in range(n_kv):
+                klen_bytes = f.read(8)
+                if len(klen_bytes) < 8:
+                    break
+                key_len = struct.unpack("<Q", klen_bytes)[0]
+                key = f.read(key_len).decode("utf-8", errors="ignore")
+                vtype_bytes = f.read(4)
+                if len(vtype_bytes) < 4:
+                    break
+                val_type = struct.unpack("<I", vtype_bytes)[0]
+
+                if val_type == 8:  # string
+                    slen = struct.unpack("<Q", f.read(8))[0]
+                    meta[key] = f.read(slen).decode("utf-8", errors="ignore")
+                elif val_type in GGUF_TYPE_SIZE:
+                    raw = f.read(GGUF_TYPE_SIZE[val_type])
+                    if val_type in (4, 5):
+                        meta[key] = struct.unpack("<I" if val_type == 4 else "<i", raw)[0]
+                    elif val_type == 10:
+                        meta[key] = struct.unpack("<Q", raw)[0]
+                    elif val_type == 7:
+                        meta[key] = struct.unpack("<?", raw)[0]
+                elif val_type == 9:  # array
+                    arr_hdr = f.read(12)
+                    if len(arr_hdr) < 12:
+                        break
+                    atype, alen = struct.unpack("<IQ", arr_hdr)
+                    if atype == 8:
+                        arr = []
+                        for _ in range(alen):
+                            slen = struct.unpack("<Q", f.read(8))[0]
+                            arr.append(f.read(slen).decode("utf-8", errors="ignore"))
+                        meta[key] = arr
+                    elif atype in GGUF_TYPE_SIZE:
+                        f.seek(alen * GGUF_TYPE_SIZE[atype], 1)
+                    else:
+                        break
+                else:
+                    break
+            info["metadata"] = meta
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
+
+def discover_local_models(models_dir):
+    """
+    Scans models_dir for all .gguf files not currently in curated catalog.
+    Parses GGUF binary headers + filename heuristics to auto-register custom models.
+    """
+    if not os.path.exists(models_dir):
+        return []
+
+    known_filenames = {m["filename"] for m in LOCAL_MODELS} | {m["filename"] for m in UNSLOTH_CATALOG}
+    for m in LOCAL_MODELS:
+        if m.get("lora_file"):
+            known_filenames.add(m["lora_file"])
+
+    discovered = []
+    try:
+        entries = sorted(os.listdir(models_dir))
+    except Exception:
+        return []
+
+    for fn in entries:
+        if not fn.endswith(".gguf") or fn.endswith(".download") or fn.startswith("."):
+            continue
+        if fn in known_filenames:
+            continue
+
+        full_path = os.path.join(models_dir, fn)
+        if not os.path.isfile(full_path):
+            continue
+
+        size_bytes = os.path.getsize(full_path)
+        size_gb = round(size_bytes / (1024 ** 3), 2)
+
+        gguf_info = parse_gguf_metadata(full_path)
+        meta = gguf_info.get("metadata", {})
+        arch = meta.get("general.architecture", "transformer")
+        name_meta = meta.get("general.name", "")
+        quant_by = meta.get("general.quantized_by", "")
+        repo_url = meta.get("general.repo_url", "")
+
+        # Check if LoRA adapter (standalone adapter cannot be run as primary base model)
+        is_adapter = False
+        if "lora" in fn.lower() or "adapter" in fn.lower() or size_gb < 0.3:
+            if name_meta == "Final_Adapter" or "adapter" in name_meta.lower() or "lora" in fn.lower():
+                is_adapter = True
+        if is_adapter:
+            continue
+
+        # Quantization extraction
+        ftype = meta.get("general.file_type")
+        quant = GGUF_FILE_TYPE_MAP.get(ftype, "")
+        if not quant:
+            qm = re.search(r"(Q\d+_[KkMmSsLl0-9_]+|IQ\d+_[A-Za-z0-9_]+|Q\d+_0|Q\d+_1|F16|F32|BF16)", fn, re.IGNORECASE)
+            quant = qm.group(1).upper() if qm else "Q4_K_M"
+
+        # Active parameter size
+        param = meta.get("general.size_label", "")
+        if not param:
+            pm = re.search(r"(\d+(\.\d+)?[Bb])", fn)
+            param = pm.group(1).upper() if pm else "Unknown"
+
+        # Model Name formatting
+        clean_name = fn.replace(".gguf", "")
+        clean_name = re.sub(r"[\._-]?(Q\d+_[A-Za-z0-9_]+|IQ\d+_[A-Za-z0-9_]+|Q\d+_0|Q\d+_1|F16|F32|BF16)", "", clean_name, flags=re.IGNORECASE)
+        clean_name = re.sub(r"[-_]", " ", clean_name).strip()
+        if not clean_name:
+            clean_name = name_meta if name_meta and name_meta != "Gguf" else fn.replace(".gguf", "")
+
+        # Context length
+        ctx = meta.get(f"{arch}.context_length", 32768)
+        if not isinstance(ctx, int) or ctx > 131072 or ctx <= 0:
+            ctx = 32768
+
+        # Determine if fine-tuned (unsloth, ft, merged)
+        is_unsloth = (quant_by == "Unsloth" or "unsloth" in repo_url.lower() or "unsloth" in fn.lower())
+        is_ft = is_unsloth or any(k in fn.lower() for k in ["ft", "finetune", "merged", "custom"])
+
+        if is_unsloth:
+            tag = "[LOCAL / Unsloth]"
+            category = "로컬 파인튜닝 (Unsloth)"
+            repo = "local/unsloth"
+        elif is_ft:
+            tag = "[LOCAL / 파인튜닝]"
+            category = "로컬 파인튜닝"
+            repo = "local/finetuned"
+        else:
+            tag = "[LOCAL / 커스텀]"
+            category = "로컬 커스텀"
+            repo = "local/custom"
+
+        model_name = f"{tag} {clean_name} ({quant})"
+        ctx_k = ctx // 1024 if isinstance(ctx, int) else 32
+        desc = f"로컬 저장소 자동 감지 모델 ({arch}, {param}, {ctx_k}K context)"
+        mid = f"local-auto-{re.sub(r'[^a-zA-Z0-9]', '-', fn.lower()).strip('-')}"
+
+        if size_gb + 2.0 <= 12.0:
+            args = f"-ngl 99 -c {min(ctx, 32768)} --cache-type-k q4_0 --cache-type-v q4_0"
+        else:
+            args = f"-ngl 24 -c {min(ctx, 16384)} --cache-type-k q4_0 --cache-type-v q4_0"
+
+        discovered.append({
+            "id": mid,
+            "repo": repo,
+            "name": model_name,
+            "filename": fn,
+            "quant": quant,
+            "size_gb": size_gb,
+            "min_vram_gb": round(size_gb + 1.0, 1),
+            "recommended_vram_gb": round(size_gb + 2.0, 1),
+            "type": "dense",
+            "active_params": param,
+            "category": category,
+            "desc": desc,
+            "base_priority": 960 if is_ft else 940,
+            "args": args,
+            "is_downloaded": True
+        })
+
+    return discovered
+
+
+def get_all_local_models(models_dir, hw=None):
+    """
+    Returns a unified list of all GGUF models physically located in models_dir,
+    including curated local models, auto-discovered custom models, and downloaded catalog models.
+    """
+    if hw is None:
+        hw = detect_hardware()
+    all_models = score_and_rank_models(hw, models_dir)
+    return [m for m in all_models if m.get("is_downloaded")]
+
 
 def detect_hardware():
     """Detects CPU, RAM, GPU, and disk information."""
@@ -591,7 +807,9 @@ def score_and_rank_models(hw, models_dir):
     ram_avail = hw["ram"]["avail_gb"]
     is_gpu = hw["gpu"]["count"] > 0
 
-    all_catalog = LOCAL_MODELS + UNSLOTH_CATALOG
+    # Auto-discover unlisted local GGUF models directly from models_dir
+    discovered_local = discover_local_models(models_dir)
+    all_catalog = LOCAL_MODELS + discovered_local + UNSLOTH_CATALOG
     scored = []
     for m in all_catalog:
         m_copy = dict(m)
@@ -657,7 +875,7 @@ def score_and_rank_models(hw, models_dir):
 
     # Sort descending by score
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:20]
+    return scored[:25]
 
 
 def format_whiptail_menu_items(models):
@@ -893,7 +1111,7 @@ def download_file(url, dest_path, expected_size_gb=0, model_id=None):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: hf_recommender.py [env|env-detail|env-summary|recommend|whiptail-menu|get-model|download|hf-status|hf-check]")
+        print("Usage: hf_recommender.py [env|env-detail|env-summary|recommend|whiptail-menu|get-model|download|hf-status|hf-check|scan-models|scan-summary]")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -925,7 +1143,7 @@ def main():
     elif cmd == "recommend":
         if DBManager:
             db = DBManager()
-            db.sync_catalog(LOCAL_MODELS + UNSLOTH_CATALOG)
+            db.sync_catalog(LOCAL_MODELS + discover_local_models(models_dir) + UNSLOTH_CATALOG)
         hw = detect_hardware()
         top10 = score_and_rank_models(hw, models_dir)
         print(json.dumps(top10, ensure_ascii=False, indent=2))
@@ -934,7 +1152,7 @@ def main():
     elif cmd == "whiptail-menu":
         if DBManager:
             db = DBManager()
-            db.sync_catalog(LOCAL_MODELS + UNSLOTH_CATALOG)
+            db.sync_catalog(LOCAL_MODELS + discover_local_models(models_dir) + UNSLOTH_CATALOG)
         hw = detect_hardware()
         top10 = score_and_rank_models(hw, models_dir)
         items = format_whiptail_menu_items(top10)
@@ -1033,6 +1251,43 @@ def main():
             print(f"                   HF_TOKEN=hf_your_access_token_here")
             print(f"                   HF_USERNAME=your_username")
             print(f"• 토큰 발급 링크 : https://huggingface.co/settings/tokens (Read 권한 권장)")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    # 10. Scan local models directory (JSON)
+    elif cmd == "scan-models":
+        hw = detect_hardware()
+        discovered = discover_local_models(models_dir)
+        all_local = get_all_local_models(models_dir, hw)
+        if DBManager:
+            db = DBManager()
+            db.sync_catalog(LOCAL_MODELS + discovered + UNSLOTH_CATALOG)
+        print(json.dumps({
+            "models_dir": models_dir,
+            "total_local_files": len(all_local),
+            "newly_discovered_count": len(discovered),
+            "local_models": all_local
+        }, ensure_ascii=False, indent=2))
+
+    # 11. Scan local models directory summary (Console text)
+    elif cmd == "scan-summary":
+        hw = detect_hardware()
+        discovered = discover_local_models(models_dir)
+        all_local = get_all_local_models(models_dir, hw)
+        if DBManager:
+            db = DBManager()
+            db.sync_catalog(LOCAL_MODELS + discovered + UNSLOTH_CATALOG)
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("🔄 로컬 모델 저장소 스캔 결과 (Reload Summary):")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"• 저장소 경로 : {models_dir}")
+        print(f"• 총 로컬 모델 : {len(all_local)}개 (자동 감지된 커스텀/Unsloth: {len(discovered)}개)")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("【현재 보유 중인 로컬 GGUF 모델 목록】")
+        for idx, m in enumerate(all_local, 1):
+            tag = m.get("offload_tag", "100% GPU")
+            cat = m.get("category", "")
+            print(f"  {idx:2d}. {m['name']} ({m['size_gb']}GB) [{tag}]")
+            print(f"      파일명: {m['filename']} │ 분류: {cat}")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 

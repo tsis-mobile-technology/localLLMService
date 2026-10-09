@@ -452,6 +452,33 @@ else:
         18 80
 }
 
+show_reload_view() {
+    local scan_res text
+    scan_res=$(python3 "$RECOMMENDER" scan-models 2>/dev/null || echo "{}")
+    text=$(python3 -c "
+import json, sys
+data = json.loads(sys.argv[1])
+total = data.get('total_local_files', 0)
+new_count = data.get('newly_discovered_count', 0)
+models_dir = data.get('models_dir', '')
+models = data.get('local_models', [])
+
+print(f'📁 대상 저장소 : {models_dir}')
+print(f'✅ 감지된 로컬 GGUF 모델 : 총 {total}개 (새로 발견된 커스텀/Unsloth: {new_count}개)')
+print('')
+print('【보유 중인 로컬 모델 목록】')
+for m in models:
+    size = m.get('size_gb', 0)
+    tag = m.get('offload_tag', '100% GPU')
+    cat = m.get('category', '')
+    print(f'  • {m[\"name\"]} ({size}GB) [{tag}] - {cat}')
+" "$scan_res")
+
+    whiptail --title "🔄 모델 저장소 스캔 및 새로고침 완료" \
+        --msgbox "$text\n\n[확인] 메인 메뉴 목록이 최신 상태로 갱신되었습니다." \
+        20 85
+}
+
 # --- UI & Model Selection ----------------------------------------------------
 
 show_model_menu() {
@@ -474,6 +501,7 @@ show_model_menu() {
     mapfile -t menu_items < <(python3 -c "import json, sys; [print(x) for x in json.loads(sys.argv[1])]" "$menu_json")
 
     # Add management actions
+    menu_items+=("R" "[🔄 새로고침] 모델 저장소 폴더 재스캔 (Reload)")
     menu_items+=("K" "[🤗 계정] Hugging Face API 토큰 및 계정 연동 상태 확인")
     menu_items+=("U" "[👥 사용자] LiteLLM 사용자 계정 및 API Key 목록 조회")
     menu_items+=("S" "[📊 통계] LiteLLM 토큰 소비 및 요청 로그 통계")
@@ -700,6 +728,11 @@ main() {
     check_prerequisites
 
     # CLI options
+    if [ "${1:-}" = "--reload" ] || [ "${1:-}" = "--scan" ]; then
+        python3 "$RECOMMENDER" scan-summary
+        exit 0
+    fi
+
     if [ "${1:-}" = "--hf-check" ]; then
         python3 "$RECOMMENDER" hf-check
         exit 0
@@ -783,7 +816,10 @@ main() {
         choice=$(show_model_menu) || exit 0
 
         # Handle management views
-        if [ "$choice" = "K" ]; then
+        if [ "$choice" = "R" ]; then
+            show_reload_view
+            continue
+        elif [ "$choice" = "K" ]; then
             show_hf_account_view
             continue
         elif [ "$choice" = "U" ]; then

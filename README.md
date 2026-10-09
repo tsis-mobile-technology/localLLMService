@@ -11,8 +11,10 @@
 - **하드웨어 최적화 GGUF TOP 20 추천**: VRAM 100% 오프로드 가능 여부 및 GPU+78GB RAM 하이브리드 적합도를 자동 계산하여 최적 모델 20종 선별
 - **자동 다운로드 & 즉시 실행**: TUI 메뉴 또는 단축 번호 선택 시 Hugging Face에서 고속 스트리밍 다운로드 후 Docker 컨테이너 자동 구동
 
-### 🧬 로컬 파인튜닝 & LoRA 어댑터 결합 지원 (NEW!)
-- **로컬 커스텀 모델 자동 감지**: `~/Projects/models/` 경로 내 GGUF 파일 자동 스캔 및 메뉴 최우선 노출
+### 🧬 로컬 파인튜닝 & 커스텀 GGUF 자동 감지 (Auto-Discovery & Reload) (NEW!)
+- **GGUF 바이너리 헤더 자동 파싱 (Zero-Dependency)**: `~/Projects/models/` 경로에 사용자가 직접 파인튜닝(Unsloth 등)하거나 다운로드한 `.gguf` 파일을 가져다 놓으면, 파이썬 내장 바이너리 파서가 `general.architecture`, `general.quantized_by`, `file_type`(양자화), `context_length`를 자동 추출하여 즉시 목록화
+- **Unsloth 파인튜닝 모델 자동 식별**: Unsloth로 파인튜닝된 GGUF 파일(`Qwen2.5-1.5B-Instruct` 등)을 메타데이터 기반으로 자동 감지하여 `[LOCAL / Unsloth]` 태그 부여
+- **원클릭 실시간 새로고침 (Reload)**: TUI 메뉴에서 `R` 키를 누르거나 `./docker_run.sh --reload` 실행 시 디렉토리를 즉각 재스캔하여 신규 파일을 메뉴에 즉시 반영
 - **Gemma 4 E4B IT 파인튜닝 3단 비교 체계**:
   - `1. [LOCAL / 병합]`: 파인튜닝 가중치가 병합된 완제품 GGUF 단독 구동 (`gemma-4-E4B-it-ft-Q4_K_M.gguf`)
   - `2. [LOCAL / LoRA]`: 순정 베이스 모델에 LoRA 어댑터를 동시 결합 구동 (`gemma-4-E4B-it-base-Q4_K_M.gguf` + `gemma-4-E4B-it-lora-f16.gguf` via `--lora`)
@@ -68,7 +70,8 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ```
 - 메뉴 최상단에 로컬 모델(1~3번) 및 하드웨어 최적화 추천 모델들이 표시됩니다.
 - 서브 메뉴:
-  - `K`: Hugging Face API 토큰 및 계정 연동 상태 확인 (NEW!)
+  - `R`: 모델 저장소 폴더 재스캔 (Reload) (NEW!)
+  - `K`: Hugging Face API 토큰 및 계정 연동 상태 확인
   - `U`: LiteLLM 사용자 계정 및 API Key 목록 조회
   - `S`: LiteLLM 토큰 소비 및 요청 통계 조회
   - `H`: 모델 다운로드 및 서버 런타임 이력 조회
@@ -79,11 +82,14 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ./docker_run.sh 1    # [LOCAL / 병합] Gemma 4 E4B IT Finetuned 완제품 구동
 ./docker_run.sh 2    # [LOCAL / LoRA] Gemma 4 E4B IT Base + LoRA 결합 구동
 ./docker_run.sh 3    # [LOCAL / 순정] Gemma 4 E4B IT Base 순정 모델 구동
-./docker_run.sh 4    # Qwen3.5 9B 등 추천 허깅페이스 모델 구동
+./docker_run.sh 4    # [LOCAL / Unsloth] Qwen2.5 1.5B Instruct Q4_K_M 자동 감지 모델 구동
+./docker_run.sh 5    # [LOCAL / Unsloth] Qwen2.5 1.5B Instruct Q8_0 자동 감지 모델 구동
+./docker_run.sh 6    # Qwen3.5 9B 등 추천 모델 구동
 ```
 
 ### 4️⃣ CLI 실시간 통계, 이력, 백업 및 복구
 ```bash
+./docker_run.sh --reload    # 모델 저장소(~/Projects/models) 즉시 재스캔 및 감지 모델 요약
 ./docker_run.sh --hf-check  # Hugging Face API 연동 상태 및 계정 확인
 ./docker_run.sh --stats     # LiteLLM 토큰 소비량 및 평균 레이턴시 통계
 ./docker_run.sh --users     # 등록된 사용자 및 활성 API Key 목록
@@ -91,7 +97,7 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ./docker_run.sh --backup    # PostgreSQL DB 즉시 백업 (backups/ 저장)
 ./docker_run.sh --restore   # 최신 백업본으로부터 DB 데이터 복원
 ./docker_run.sh --env       # 감지된 PC 하드웨어 환경 상세
-./docker_run.sh --list      # 추천 모델 TOP 20 전체 목록 출력
+./docker_run.sh --list      # 보유 모델 및 추천 모델 전체 목록 출력
 ```
 
 ### 5️⃣ 서비스 정상 종료 및 자동 백업/복원
