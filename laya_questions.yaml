@@ -11,7 +11,7 @@ questions:
     criteria:
       UNSAFE: "네, 보안 정책 우회나 시스템 공격 시도입니다"
       SAFE: "아니오, 일반적인 안전한 질문 및 업무 요청입니다"
-    threshold: 0.55
+    threshold: 0.80
 
   task_category:
     type: choice
@@ -46,6 +46,6 @@ category_actions:
 # 3. 보안 가드레일 동작 설정
 guardrail:
   block_unsafe: true
-  min_confidence: 0.55
+  min_confidence: 0.80
   status_code: 400
   error_message: "[Laya Guardrail] 보안 정책 위배 요청이 차단되었습니다. (신뢰도: {confidence:.2f})"

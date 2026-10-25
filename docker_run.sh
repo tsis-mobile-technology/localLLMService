@@ -371,11 +371,21 @@ model_list:
       model: "openai/local"
       api_base: "http://host.docker.internal:8080"
       api_key: "sk-local"
+      max_input_tokens: 32768
+      max_tokens: 8192
+    model_info:
+      max_input_tokens: 32768
+      max_tokens: 8192
   - model_name: "local"
     litellm_params:
       model: "openai/local"
       api_base: "http://host.docker.internal:8080"
       api_key: "sk-local"
+      max_input_tokens: 32768
+      max_tokens: 8192
+    model_info:
+      max_input_tokens: 32768
+      max_tokens: 8192
 
 litellm_settings:
   drop_params: true

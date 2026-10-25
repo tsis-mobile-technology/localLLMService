@@ -98,7 +98,7 @@ class LayaDecisionInterceptor(CustomLogger):
                         "UNSAFE": "네, 보안 정책 우회나 시스템 공격 시도입니다",
                         "SAFE": "아니오, 일반적인 안전한 질문 및 업무 요청입니다"
                     },
-                    "threshold": 0.55
+                    "threshold": 0.80
                 },
                 "task_category": {
                     "type": "choice",
@@ -131,7 +131,7 @@ class LayaDecisionInterceptor(CustomLogger):
             },
             "guardrail": {
                 "block_unsafe": True,
-                "min_confidence": 0.55,
+                "min_confidence": 0.80,
                 "status_code": 400,
                 "error_message": "[Laya Guardrail] 보안 정책 위배 요청이 차단되었습니다. (신뢰도: {confidence:.2f})"
             }
@@ -182,12 +182,102 @@ class LayaDecisionInterceptor(CustomLogger):
         except Exception as e:
             logger.warning(f"Laya DB audit logging failed: {e}")
 
+    def _trim_messages_to_context_budget(self, messages: list, max_tokens: int = 26000) -> list:
+        """
+        Safely trims messages array so that total estimated tokens stay well within
+        the backend LLM's context limit (e.g. 32K on llama-server), preventing
+        ContextWindowExceededError from coding agents dumping entire repositories.
+        """
+        if not messages or not isinstance(messages, list):
+            return messages
+
+        def get_msg_len(m: dict) -> int:
+            c = m.get("content", "")
+            if isinstance(c, str):
+                return len(c)
+            elif isinstance(c, list):
+                return sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
+            return 0
+
+        total_chars = sum(get_msg_len(m) for m in messages)
+        max_chars = max_tokens * 3  # ~78,000 chars for 26,000 tokens
+
+        if total_chars <= max_chars:
+            return messages
+
+        print(f"⚠️ [Laya Interceptor] Incoming request payload ({total_chars:,} chars, ~{total_chars//3:,} tokens) exceeds 32K context budget! Auto-pruning to prevent crash...", flush=True)
+
+        # 1. Truncate individual giant messages (e.g. massive file dumps > 15,000 chars)
+        trimmed_messages = []
+        for m in messages:
+            if not isinstance(m, dict):
+                trimmed_messages.append(m)
+                continue
+            m_copy = dict(m)
+            c = m_copy.get("content", "")
+            if isinstance(c, str) and len(c) > 15000:
+                m_copy["content"] = c[:12000] + f"\n\n[... Truncated {len(c) - 12000:,} chars by LiteLLM Context Guard to fit 32K context window ...]\n"
+            elif isinstance(c, list):
+                new_c = []
+                for p in c:
+                    if isinstance(p, dict) and p.get("type") == "text" and len(p.get("text", "")) > 15000:
+                        p_copy = dict(p)
+                        t = p_copy["text"]
+                        p_copy["text"] = t[:12000] + f"\n\n[... Truncated {len(t) - 12000:,} chars by LiteLLM Context Guard to fit 32K context window ...]\n"
+                        new_c.append(p_copy)
+                    else:
+                        new_c.append(p)
+                m_copy["content"] = new_c
+            trimmed_messages.append(m_copy)
+
+        # 2. Check total characters again
+        total_chars = sum(get_msg_len(m) for m in trimmed_messages)
+        if total_chars <= max_chars:
+            return trimmed_messages
+
+        # 3. If still exceeding budget, prune older middle messages preserving system prompt (first) and latest instruction (last)
+        if len(trimmed_messages) <= 2:
+            last_m = dict(trimmed_messages[-1])
+            c = last_m.get("content", "")
+            if isinstance(c, str):
+                last_m["content"] = c[-max_chars:]
+            return [trimmed_messages[0], last_m] if len(trimmed_messages) == 2 else [last_m]
+
+        first_msg = trimmed_messages[0]
+        last_msg = trimmed_messages[-1]
+        kept_chars = get_msg_len(first_msg) + get_msg_len(last_msg)
+
+        middle = trimmed_messages[1:-1]
+        selected_middle = []
+        for m in reversed(middle):
+            m_len = get_msg_len(m)
+            if kept_chars + m_len <= max_chars:
+                selected_middle.insert(0, m)
+                kept_chars += m_len
+            else:
+                break
+
+        pruned = [first_msg]
+        if len(selected_middle) < len(middle):
+            pruned.append({
+                "role": "system",
+                "content": f"[... LiteLLM Context Guard: {len(middle) - len(selected_middle)} older messages omitted to fit 32K context window ...]"
+            })
+        pruned.extend(selected_middle)
+        pruned.append(last_msg)
+        return pruned
+
     async def async_pre_call_hook(self, user_api_key_dict: dict, cache: dict, data: dict, call_type: str) -> dict:
         """
         Intercepts incoming chat/completion requests before passing to the backend LLM.
         """
         if not self._enabled:
             return data
+
+        # 0. Context Guard: prevent ContextWindowExceededError on massive agent payloads
+        if "messages" in data and isinstance(data["messages"], list):
+            max_ctx = int(os.environ.get("MAX_CONTEXT_TOKENS", "26000"))
+            data["messages"] = self._trim_messages_to_context_budget(data["messages"], max_tokens=max_ctx)
 
         # 1. Check for explicit client bypass request (metadata or extra_body)
         meta = data.get("metadata") or {}
@@ -226,6 +316,22 @@ class LayaDecisionInterceptor(CustomLogger):
         if not user_message:
             return data
 
+        # Check for automated coding agent compaction / summary requests
+        is_compaction = (
+            user_message.startswith("Here is the conversation so far:")
+            or "<conversation>" in user_message
+            or "Provide a summary of the conversation" in user_message
+            or "summarize the conversation so far" in user_message.lower()
+        )
+        if is_compaction:
+            print("⚡ [Laya Interceptor] Agent conversation compaction detected (Auto-pass)", flush=True)
+            asyncio.create_task(self._async_log_to_db({
+                "user_prompt": user_message[:500],
+                "bypassed": True,
+                "latency_ms": 0.0
+            }))
+            return data
+
         cfg = self._load_yaml_config()
         questions_schema = cfg.get("questions", {})
         category_actions = cfg.get("category_actions", {})
@@ -238,8 +344,11 @@ class LayaDecisionInterceptor(CustomLogger):
             clean_q.pop("threshold", None)
             clean_questions[qid] = clean_q
 
+        # Slice user prompt for Laya decision (max 2000 chars) to prevent encoder overflow on large context
+        laya_text = user_message[:2000]
+
         laya_payload = {
-            "state": {"text": user_message},
+            "state": {"text": laya_text},
             "questions": clean_questions
         }
         target_model = cfg.get("model")
@@ -269,7 +378,7 @@ class LayaDecisionInterceptor(CustomLogger):
                 prob_unsafe = float(sec.get("probabilities", {}).get("UNSAFE", 0.0))
                 sec_conf = prob_unsafe or ans_conf
 
-                guard_threshold = float(guardrail_cfg.get("min_confidence", 0.55))
+                guard_threshold = float(guardrail_cfg.get("min_confidence", 0.80))
                 if choice == "UNSAFE" and (prob_unsafe >= guard_threshold or ans_conf >= guard_threshold):
                     print(f"🚨 [Laya Guardrail] Blocked malicious prompt (UNSAFE confidence: {sec_conf:.2f})", flush=True)
                     logger.warning(f"🚨 [Laya Guardrail] Blocked malicious prompt (UNSAFE confidence: {sec_conf:.2f})")
