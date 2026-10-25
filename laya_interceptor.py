@@ -8,6 +8,7 @@ laya_interceptor.py
 
 import os
 import sys
+import json
 import time
 import asyncio
 import logging
@@ -182,6 +183,81 @@ class LayaDecisionInterceptor(CustomLogger):
         except Exception as e:
             logger.warning(f"Laya DB audit logging failed: {e}")
 
+    def _trim_tools_to_context_budget(self, tools: list, max_tool_chars: int = 24000) -> tuple[list, int]:
+        """
+        Safely prunes oversized 'tools' arrays (e.g. 200+ MCP tools totaling 260K+ tokens)
+        so that tool definitions fit comfortably within a 32K local LLM context window,
+        preserving core coding agent tools (bash, read, edit, write, glob, grep, etc.).
+        Returns (pruned_tools, kept_tool_chars).
+        """
+        if not tools or not isinstance(tools, list):
+            return tools, 0
+
+        try:
+            total_chars = len(json.dumps(tools, ensure_ascii=False))
+        except Exception:
+            total_chars = sum(len(str(t)) for t in tools)
+
+        if total_chars <= max_tool_chars:
+            return tools, total_chars
+
+        print(
+            f"⚠️ [Laya Interceptor] Incoming 'tools' schema ({len(tools)} tools, {total_chars:,} chars, ~{total_chars//3:,} tokens) "
+            f"exceeds 32K context budget! Pruning MCP/heavy tools...",
+            flush=True
+        )
+
+        core_tool_names = {
+            "bash", "read", "write", "edit", "multiedit", "glob", "grep",
+            "list", "ls", "patch", "apply_patch", "webfetch", "websearch",
+            "todowrite", "todoread", "task", "skill", "question", "batch",
+            "codesearch", "lsp"
+        }
+
+        core_tools = []
+        extra_tools = []
+
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function") or {}
+            name = fn.get("name", "") if isinstance(fn, dict) else t.get("name", "")
+            # Compact overly verbose tool descriptions (> 600 chars) to save context
+            t_copy = json.loads(json.dumps(t))
+            if isinstance(t_copy.get("function"), dict):
+                desc = t_copy["function"].get("description", "")
+                if isinstance(desc, str) and len(desc) > 600:
+                    t_copy["function"]["description"] = desc[:600] + "..."
+            if name in core_tool_names:
+                core_tools.append(t_copy)
+            else:
+                extra_tools.append((len(json.dumps(t_copy, ensure_ascii=False)), t_copy))
+
+        kept_tools = []
+        kept_chars = 2  # for '[]'
+
+        for t in core_tools:
+            t_len = len(json.dumps(t, ensure_ascii=False)) + 2
+            if kept_chars + t_len <= max_tool_chars or not kept_tools:
+                kept_tools.append(t)
+                kept_chars += t_len
+
+        # Sort remaining tools by size (smallest first) and add if budget allows
+        extra_tools.sort(key=lambda x: x[0])
+        for t_len, t in extra_tools:
+            if kept_chars + t_len + 2 <= max_tool_chars:
+                kept_tools.append(t)
+                kept_chars += t_len + 2
+            else:
+                break
+
+        print(
+            f"✅ [Laya Interceptor] Pruned tools: {len(tools)} -> {len(kept_tools)} tools "
+            f"({kept_chars:,} chars, ~{kept_chars//3:,} tokens)",
+            flush=True
+        )
+        return kept_tools, kept_chars
+
     def _trim_messages_to_context_budget(self, messages: list, max_tokens: int = 26000) -> list:
         """
         Safely trims messages array so that total estimated tokens stay well within
@@ -192,12 +268,17 @@ class LayaDecisionInterceptor(CustomLogger):
             return messages
 
         def get_msg_len(m: dict) -> int:
+            if not isinstance(m, dict):
+                return len(str(m))
+            length = 0
             c = m.get("content", "")
             if isinstance(c, str):
-                return len(c)
+                length += len(c)
             elif isinstance(c, list):
-                return sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
-            return 0
+                length += sum(len(p.get("text", "")) if isinstance(p, dict) else len(str(p)) for p in c)
+            if "tool_calls" in m and m["tool_calls"]:
+                length += len(json.dumps(m["tool_calls"], ensure_ascii=False))
+            return length
 
         total_chars = sum(get_msg_len(m) for m in messages)
         max_chars = max_tokens * 3  # ~78,000 chars for 26,000 tokens
@@ -274,10 +355,23 @@ class LayaDecisionInterceptor(CustomLogger):
         if not self._enabled:
             return data
 
-        # 0. Context Guard: prevent ContextWindowExceededError on massive agent payloads
+        # 0. Context Guard: prevent ContextWindowExceededError on massive agent payloads (both tools & messages)
+        max_ctx = int(os.environ.get("MAX_CONTEXT_TOKENS", "24000"))
+        tool_chars = 0
+        if "tools" in data and isinstance(data["tools"], list):
+            max_tool_chars = int(os.environ.get("MAX_TOOL_CHARS", "24000"))
+            data["tools"], tool_chars = self._trim_tools_to_context_budget(data["tools"], max_tool_chars=max_tool_chars)
+            if not data["tools"]:
+                data.pop("tools", None)
+
+        # Cap max_tokens / max_completion_tokens if client requests an excessive output budget
+        for tok_key in ("max_tokens", "max_completion_tokens"):
+            if isinstance(data.get(tok_key), int) and data[tok_key] > 8192:
+                data[tok_key] = 8192
+
         if "messages" in data and isinstance(data["messages"], list):
-            max_ctx = int(os.environ.get("MAX_CONTEXT_TOKENS", "26000"))
-            data["messages"] = self._trim_messages_to_context_budget(data["messages"], max_tokens=max_ctx)
+            remaining_msg_tokens = max(8000, max_ctx - (tool_chars // 3))
+            data["messages"] = self._trim_messages_to_context_budget(data["messages"], max_tokens=remaining_msg_tokens)
 
         # 1. Check for explicit client bypass request (metadata or extra_body)
         meta = data.get("metadata") or {}
@@ -319,6 +413,7 @@ class LayaDecisionInterceptor(CustomLogger):
         # Check for automated coding agent compaction / summary requests
         is_compaction = (
             user_message.startswith("Here is the conversation so far:")
+            or user_message.startswith("The previous request exceeded the provider's size limit")
             or "<conversation>" in user_message
             or "Provide a summary of the conversation" in user_message
             or "summarize the conversation so far" in user_message.lower()
@@ -406,6 +501,10 @@ class LayaDecisionInterceptor(CustomLogger):
                 cat_conf = float(cat_info.get("answer_confidence", 0.0) or cat_info.get("confidence", 0.0))
                 urgency = float(urg_info.get("score", 0.0))
 
+                # If request includes coding agent tools, prevent misclassification into cs_ticket
+                if data.get("tools") and category == "cs_ticket":
+                    category = "coding"
+
                 # Lookup action for category
                 action = category_actions.get(category, category_actions.get("general", {}))
                 temp = action.get("temperature", 0.7)
@@ -417,10 +516,16 @@ class LayaDecisionInterceptor(CustomLogger):
 
                 data["temperature"] = temp
 
-                # Inject system prompt into messages
+                # Inject system prompt into messages safely
                 messages = data["messages"]
                 if messages and messages[0].get("role") == "system":
-                    messages[0]["content"] = f"{sys_msg}\n\n{messages[0]['content']}"
+                    existing_sys = messages[0].get("content", "")
+                    if isinstance(existing_sys, str):
+                        # Only prepend if existing system prompt is not already a massive coding agent harness
+                        if len(existing_sys) < 1500:
+                            messages[0]["content"] = f"{sys_msg}\n\n{existing_sys}"
+                    elif isinstance(existing_sys, list):
+                        pass
                 else:
                     messages.insert(0, {"role": "system", "content": sys_msg})
 
