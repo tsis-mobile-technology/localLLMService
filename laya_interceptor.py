@@ -261,8 +261,11 @@ class LayaDecisionInterceptor(CustomLogger):
     def _trim_messages_to_context_budget(self, messages: list, max_tokens: int = 26000) -> list:
         """
         Safely trims messages array so that total estimated tokens stay well within
-        the backend LLM's context limit (e.g. 32K on llama-server), preventing
-        ContextWindowExceededError from coding agents dumping entire repositories.
+        the backend LLM's context limit (e.g. 32K on llama-server), while strictly
+        preserving Qwen3 / ChatML Jinja template invariants:
+          1. At most one 'system' message, strictly at index 0.
+          2. At least one 'user' query message is ALWAYS preserved.
+          3. 'assistant' tool_calls and their following 'tool' responses are kept paired.
         """
         if not messages or not isinstance(messages, list):
             return messages
@@ -280,72 +283,150 @@ class LayaDecisionInterceptor(CustomLogger):
                 length += len(json.dumps(m["tool_calls"], ensure_ascii=False))
             return length
 
-        total_chars = sum(get_msg_len(m) for m in messages)
-        max_chars = max_tokens * 3  # ~78,000 chars for 26,000 tokens
-
-        if total_chars <= max_chars:
-            return messages
-
-        print(f"⚠️ [Laya Interceptor] Incoming request payload ({total_chars:,} chars, ~{total_chars//3:,} tokens) exceeds 32K context budget! Auto-pruning to prevent crash...", flush=True)
-
-        # 1. Truncate individual giant messages (e.g. massive file dumps > 15,000 chars)
-        trimmed_messages = []
-        for m in messages:
-            if not isinstance(m, dict):
-                trimmed_messages.append(m)
-                continue
+        def truncate_msg_content(m: dict, limit: int) -> dict:
             m_copy = dict(m)
             c = m_copy.get("content", "")
-            if isinstance(c, str) and len(c) > 15000:
-                m_copy["content"] = c[:12000] + f"\n\n[... Truncated {len(c) - 12000:,} chars by LiteLLM Context Guard to fit 32K context window ...]\n"
+            if isinstance(c, str) and len(c) > limit:
+                m_copy["content"] = (
+                    c[:limit]
+                    + f"\n\n[... Truncated {len(c) - limit:,} chars by LiteLLM Context Guard to fit 32K context window ...]"
+                )
             elif isinstance(c, list):
                 new_c = []
                 for p in c:
-                    if isinstance(p, dict) and p.get("type") == "text" and len(p.get("text", "")) > 15000:
+                    if isinstance(p, dict) and p.get("type") == "text" and len(p.get("text", "")) > limit:
                         p_copy = dict(p)
                         t = p_copy["text"]
-                        p_copy["text"] = t[:12000] + f"\n\n[... Truncated {len(t) - 12000:,} chars by LiteLLM Context Guard to fit 32K context window ...]\n"
+                        p_copy["text"] = (
+                            t[:limit]
+                            + f"\n\n[... Truncated {len(t) - limit:,} chars by LiteLLM Context Guard to fit 32K context window ...]"
+                        )
                         new_c.append(p_copy)
                     else:
                         new_c.append(p)
                 m_copy["content"] = new_c
-            trimmed_messages.append(m_copy)
+            return m_copy
 
-        # 2. Check total characters again
-        total_chars = sum(get_msg_len(m) for m in trimmed_messages)
+        # 0. Normalize multiple 'system' messages into a single index-0 system message (Qwen3 Jinja requirement)
+        sys_parts = []
+        non_sys_messages = []
+        for m in messages:
+            if isinstance(m, dict) and m.get("role") == "system":
+                c = m.get("content", "")
+                if isinstance(c, str) and c.strip():
+                    sys_parts.append(c.strip())
+                elif isinstance(c, list):
+                    txt = "\n".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("text"))
+                    if txt.strip():
+                        sys_parts.append(txt.strip())
+            else:
+                non_sys_messages.append(m)
+
+        normalized = []
+        if sys_parts:
+            normalized.append({"role": "system", "content": "\n\n".join(sys_parts)})
+        normalized.extend(non_sys_messages)
+
+        # Ensure at least one 'user' message exists for Qwen3 Jinja template
+        if not any(isinstance(m, dict) and m.get("role") == "user" for m in normalized):
+            insert_idx = 1 if (normalized and normalized[0].get("role") == "system") else 0
+            normalized.insert(insert_idx, {"role": "user", "content": "Continue with the task."})
+
+        total_chars = sum(get_msg_len(m) for m in normalized)
+        max_chars = max_tokens * 3  # ~54,000 - 72,000 chars
+
         if total_chars <= max_chars:
-            return trimmed_messages
+            return normalized
 
-        # 3. If still exceeding budget, prune older middle messages preserving system prompt (first) and latest instruction (last)
-        if len(trimmed_messages) <= 2:
-            last_m = dict(trimmed_messages[-1])
-            c = last_m.get("content", "")
-            if isinstance(c, str):
-                last_m["content"] = c[-max_chars:]
-            return [trimmed_messages[0], last_m] if len(trimmed_messages) == 2 else [last_m]
+        print(
+            f"⚠️ [Laya Interceptor] Incoming request payload ({total_chars:,} chars, ~{total_chars//3:,} tokens) "
+            f"exceeds 32K context budget! Auto-pruning to prevent crash...",
+            flush=True
+        )
 
-        first_msg = trimmed_messages[0]
-        last_msg = trimmed_messages[-1]
-        kept_chars = get_msg_len(first_msg) + get_msg_len(last_msg)
+        # 1. Compress older tool outputs (limit=1500 chars) and recent/other giant messages (limit=8000 chars)
+        num_msgs = len(normalized)
+        compressed = []
+        for idx, m in enumerate(normalized):
+            if not isinstance(m, dict):
+                compressed.append(m)
+                continue
+            role = m.get("role", "")
+            is_recent = idx >= num_msgs - 3
+            if role == "tool" and not is_recent:
+                compressed.append(truncate_msg_content(m, 1500))
+            elif role == "system":
+                compressed.append(truncate_msg_content(m, 10000))
+            else:
+                compressed.append(truncate_msg_content(m, 8000))
 
-        middle = trimmed_messages[1:-1]
-        selected_middle = []
-        for m in reversed(middle):
-            m_len = get_msg_len(m)
-            if kept_chars + m_len <= max_chars:
-                selected_middle.insert(0, m)
-                kept_chars += m_len
+        total_chars = sum(get_msg_len(m) for m in compressed)
+        if total_chars <= max_chars:
+            print(
+                f"✅ [Laya Interceptor] Compressed messages to {total_chars:,} chars (~{total_chars//3:,} tokens)",
+                flush=True
+            )
+            return compressed
+
+        # 2. If still exceeding budget, anchor system message (index 0) and the latest 'user' message,
+        #    and keep as many recent atomic [assistant + tool*] turn groups as fit in max_chars.
+        has_sys = compressed and compressed[0].get("role") == "system"
+        sys_msg = compressed[0] if has_sys else None
+        body_msgs = compressed[1:] if has_sys else compressed
+
+        # Find the last 'user' message in body_msgs
+        last_user_idx = -1
+        for i in range(len(body_msgs) - 1, -1, -1):
+            if isinstance(body_msgs[i], dict) and body_msgs[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx == -1:
+            user_anchor = {"role": "user", "content": "Continue with the task."}
+            after_user = body_msgs
+        else:
+            user_anchor = truncate_msg_content(body_msgs[last_user_idx], 6000)
+            after_user = body_msgs[last_user_idx + 1:]
+
+        # Group after_user into atomic turns: each assistant message + its following tool messages
+        groups = []
+        current_group = []
+        for m in after_user:
+            role = m.get("role", "") if isinstance(m, dict) else ""
+            if role == "assistant" and current_group:
+                groups.append(current_group)
+                current_group = [m]
+            else:
+                current_group.append(m)
+        if current_group:
+            groups.append(current_group)
+
+        kept_chars = (get_msg_len(sys_msg) if sys_msg else 0) + get_msg_len(user_anchor)
+        kept_groups = []
+        for grp in reversed(groups):
+            grp_len = sum(get_msg_len(x) for x in grp)
+            if kept_chars + grp_len <= max_chars or not kept_groups:
+                # If even the single latest group exceeds max_chars, further shrink its tool outputs
+                if kept_chars + grp_len > max_chars:
+                    grp = [truncate_msg_content(x, 2500) if x.get("role") == "tool" else truncate_msg_content(x, 4000) for x in grp]
+                    grp_len = sum(get_msg_len(x) for x in grp)
+                kept_groups.insert(0, grp)
+                kept_chars += grp_len
             else:
                 break
 
-        pruned = [first_msg]
-        if len(selected_middle) < len(middle):
-            pruned.append({
-                "role": "system",
-                "content": f"[... LiteLLM Context Guard: {len(middle) - len(selected_middle)} older messages omitted to fit 32K context window ...]"
-            })
-        pruned.extend(selected_middle)
-        pruned.append(last_msg)
+        pruned = []
+        if sys_msg:
+            pruned.append(sys_msg)
+        pruned.append(user_anchor)
+        for grp in kept_groups:
+            pruned.extend(grp)
+
+        print(
+            f"✅ [Laya Interceptor] Pruned messages: {len(messages)} -> {len(pruned)} messages "
+            f"({kept_chars:,} chars, ~{kept_chars//3:,} tokens, user query preserved)",
+            flush=True
+        )
         return pruned
 
     async def async_pre_call_hook(self, user_api_key_dict: dict, cache: dict, data: dict, call_type: str) -> dict:
