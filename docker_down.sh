@@ -31,8 +31,8 @@ if db.is_available():
 " 2>/dev/null || true
 fi
 
-docker stop litellm-proxy llama-server 2>/dev/null || true
-docker rm -f litellm-proxy llama-server 2>/dev/null || true
+docker stop litellm-proxy laya-engine llama-server 2>/dev/null || true
+docker rm -f litellm-proxy laya-engine llama-server 2>/dev/null || true
 
 # 3. Docker Compose Down 실행
 echo "📦 PostgreSQL 및 Compose 서비스 종료 중 (docker compose down)..."

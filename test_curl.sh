@@ -1,57 +1,126 @@
 #!/bin/bash
+set -euo pipefail
 
-# Configuration
-#BASE_URL="http://172.25.110.204:4000/v1"
-#API_KEY="sk-drPtCcb3695mAXc_5_SRlg"
-#MODEL="gemma-4-31b"
-#BASE_URL="http://172.25.110.204:8000/v1"
-#API_KEY="sk-"
-#MODEL="google/gemma-4-31B-it"
+# Default configuration
 BASE_URL="http://localhost:4000/v1"
-#API_KEY="sk-drPtCcb3695mAXc_5_SRlg"
 API_KEY="sk-local-master"
 MODEL="gpt-4o"
-# "gemma-4-31b"
+QUERY=""
+MODE="laya"
+SKIP_LAYA=false
 
+# 1. Parse command line arguments
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-laya|-n)
+      MODE="no-laya"
+      SKIP_LAYA=true
+      shift
+      ;;
+    --direct|-d)
+      MODE="direct"
+      BASE_URL="http://localhost:8080/v1"
+      API_KEY=""
+      shift
+      ;;
+    --help|-h)
+      echo "사용법: $0 [옵션] [\"질문\"]"
+      echo ""
+      echo "옵션:"
+      echo "  --no-laya, -n    LiteLLM(:4000)을 경유하되 Laya 인터셉터만 건너뜀 (skip_laya=True)"
+      echo "  --direct,  -d    LiteLLM과 Laya를 모두 건너뛰고 LLaMA.cpp 백엔드(:8080) 직접 호출"
+      echo "  --help,    -h    도움말 출력"
+      echo ""
+      echo "예시:"
+      echo "  $0 \"파이썬 소수 판별 함수 작성해줘\"           # 기본 (LiteLLM + Laya 결정 엔진)"
+      echo "  $0 --no-laya \"파이썬 소수 판별 함수 작성해줘\"  # Laya 우회 모드 (LiteLLM 단독)"
+      echo "  $0 --direct \"파이썬 소수 판별 함수 작성해줘\"   # LLaMA.cpp 백엔드 직접 호출"
+      exit 0
+      ;;
+    *)
+      if [ -z "$QUERY" ]; then
+        QUERY="$1"
+      else
+        QUERY="$QUERY $1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$QUERY" ]; then
+  QUERY="안녕, 오늘 날짜를 유추해서 시를 작성해.."
+fi
+
+# Print banner based on mode
 echo "=================================================="
-echo "🚀 Testing API Endpoint"
+if [ "$MODE" = "direct" ]; then
+  echo "🚀 Testing API Endpoint (Direct LLaMA.cpp - Bypass LiteLLM & Laya)"
+elif [ "$MODE" = "no-laya" ]; then
+  echo "🚀 Testing API Endpoint (LiteLLM Proxy - Laya Bypassed)"
+else
+  echo "🚀 Testing API Endpoint (with Laya Decision Interceptor)"
+fi
 echo " - URL:   $BASE_URL"
+echo " - Mode:  $MODE"
 echo " - Model: $MODEL"
+echo " - Query: $QUERY"
 echo "=================================================="
 
-# 1. API 호출 및 소요 시간 측정 (HTTP 상태 코드와 응답 바디 분리 수집)
+# 2. JSON payload build
 START_TIME=$(date +%s.%N)
 
+PAYLOAD=$(python3 -c "
+import json, sys
+model = sys.argv[1]
+query = sys.argv[2]
+skip_laya = sys.argv[3].lower() == 'true'
+
+data = {
+    'model': model,
+    'messages': [{'role': 'user', 'content': query}]
+}
+if skip_laya:
+    data['metadata'] = {'skip_laya': True}
+
+print(json.dumps(data))
+" "$MODEL" "$QUERY" "$SKIP_LAYA")
+
+# Build headers
+AUTH_HEADER=()
+if [ -n "$API_KEY" ]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $API_KEY")
+fi
+
 RESPONSE_DATA=$(curl -s -w "\n%{http_code}" --location "$BASE_URL/chat/completions" \
-  --header "Content-Type: application/json" \
-  --header "Authorization: Bearer $API_KEY" \
-  --data "{
-    \"model\": \"$MODEL\",
-    \"messages\": [
-      {
-        \"role\": \"user\",
-        \"content\": \"안녕, 오늘 날짜를 유추해서 시를 작성해..\"
-      }
-    ]
-  }")
+  -H "Content-Type: application/json" \
+  ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} \
+  --data "$PAYLOAD")
 
 END_TIME=$(date +%s.%N)
 DURATION=$(echo "$END_TIME - $START_TIME" | bc 2>/dev/null || echo "N/A")
 
-# 응답 바디와 HTTP 상태 코드 분리
+# Response parsing
 HTTP_STATUS=$(echo "$RESPONSE_DATA" | tail -n 1)
 HTTP_BODY=$(echo "$RESPONSE_DATA" | sed '$d')
 
-# 2. 결과 판별 및 시각화 출력
+# 3. Output visualization
 echo ""
 if [ "$HTTP_STATUS" -eq 200 ]; then
     echo "🟢 [SUCCESS] API Response Received (Status: $HTTP_STATUS)"
     echo "⏱️  Response Time: ${DURATION}s"
     echo "--------------------------------------------------"
     
-    # jq를 이용한 주요 데이터 파싱 및 가독성 높은 출력
     echo "🤖 [Assistant Answer]:"
-    echo "$HTTP_BODY" | jq -r '.choices[0].message.content'
+    echo "$HTTP_BODY" | jq -r '
+      .choices[0].message | 
+      if (.content != null and .content != "") then 
+        .content 
+      elif (.reasoning_content != null and .reasoning_content != "") then 
+        .reasoning_content 
+      else 
+        "No response text" 
+      end'
     
     echo "--------------------------------------------------"
     echo "📊 [Token Usage]:"

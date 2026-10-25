@@ -56,6 +56,13 @@ readonly LITELLM_IMAGE="ghcr.io/berriai/litellm:main-latest"
 readonly LITELLM_CONFIG="$MODELS_DIR/litellm_config.yaml"
 readonly LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-local-master}"
 
+# Laya Decision Engine Integration (System 1)
+readonly LAYA_CONTAINER="laya-engine"
+readonly LAYA_PORT=8001
+readonly LAYA_IMAGE="local-laya:latest"
+LAYA_ENABLED="${LAYA_ENABLED:-true}"
+LAYA_CURRENT_TIER="bypass"
+
 # Docker GPU Support Flag
 DOCKER_GPU_SUPPORT=true
 
@@ -232,6 +239,24 @@ get_litellm_status() {
     fi
 }
 
+get_laya_status() {
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${LAYA_CONTAINER}$"; then
+        local dev
+        dev=$(docker inspect "$LAYA_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep "^LAYA_DEVICE=" | cut -d= -f2 || echo "auto")
+        if [ "$dev" = "cuda" ]; then
+            echo "🟢 GPU"
+        elif [ "$dev" = "cpu" ]; then
+            echo "🟢 CPU"
+        else
+            echo "🟢 UP"
+        fi
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${LAYA_CONTAINER}$"; then
+        echo "🔴 STOPPED"
+    else
+        echo "⚫ OFF"
+    fi
+}
+
 stop_existing_container() {
     local status litellm_status
     litellm_status=$(get_litellm_status)
@@ -240,6 +265,11 @@ stop_existing_container() {
     if [[ "$litellm_status" != "⚫ NOT RUNNING" ]]; then
         docker stop "$LITELLM_CONTAINER" 2>/dev/null || true
         docker rm -f "$LITELLM_CONTAINER" 2>/dev/null || true
+    fi
+
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${LAYA_CONTAINER}$"; then
+        docker stop "$LAYA_CONTAINER" 2>/dev/null || true
+        docker rm -f "$LAYA_CONTAINER" 2>/dev/null || true
     fi
 
     if [[ "$status" != "⚫ NOT RUNNING" ]]; then
@@ -252,9 +282,76 @@ stop_existing_container() {
     docker rm -f "$CONTAINER_NAME" &>/dev/null || true
 }
 
-# --- liteLLM Configuration ---------------------------------------------------
+# --- liteLLM & Laya Configuration --------------------------------------------
+
+ensure_laya_image() {
+    if ! docker image inspect "$LAYA_IMAGE" &>/dev/null; then
+        echo "📦 Laya 결정 엔진 Docker 이미지 빌드 중 ($LAYA_IMAGE)..."
+        (cd "$SCRIPT_DIR" && docker build -t "$LAYA_IMAGE" -f Dockerfile.laya .)
+    fi
+}
+
+launch_laya() {
+    local tier="${1:-gpu}"
+    LAYA_CURRENT_TIER="$tier"
+    if [ "$tier" = "bypass" ] || [ "$LAYA_ENABLED" = "false" ]; then
+        echo "ℹ️  Laya 결정 엔진: 바이패스 모드 (구동 생략)"
+        return 0
+    fi
+
+    ensure_laya_image
+
+    echo "🚀 Laya 결정 엔진 컨테이너 시작 중 (Tier: $tier)..."
+    docker stop "$LAYA_CONTAINER" &>/dev/null || true
+    docker rm -f "$LAYA_CONTAINER" &>/dev/null || true
+
+    local laya_gpu_args=()
+    if [ "$tier" = "gpu" ] && [ "$DOCKER_GPU_SUPPORT" = "true" ]; then
+        laya_gpu_args+=(--gpus all)
+        laya_gpu_args+=(-e "LAYA_DEVICE=cuda")
+        echo "⚡ Laya 가속 모드: 100% GPU (CUDA, ~30ms 속도)"
+    else
+        laya_gpu_args+=(-e "LAYA_DEVICE=cpu")
+        laya_gpu_args+=(-e "OMP_NUM_THREADS=4")
+        echo "⚡ Laya 가속 모드: CPU + 78GB RAM (VRAM 0GB 사용, GPU OOM 방지)"
+    fi
+
+    local laya_out
+    if ! laya_out=$(docker run -d --name "$LAYA_CONTAINER" \
+        --network "$DOCKER_NETWORK" \
+        ${laya_gpu_args[@]+"${laya_gpu_args[@]}"} \
+        -p ${LAYA_PORT}:8000 \
+        -v "${HOME}/.cache/huggingface:/root/.cache/huggingface" \
+        -e "LAYA_HOST=0.0.0.0" \
+        -e "LAYA_PORT=8000" \
+        -e "LAYA_PRELOAD=1" \
+        -e "LAYA_MODELS=multilingual,english" \
+        -e "HF_HOME=/root/.cache/huggingface" \
+        "$LAYA_IMAGE" 2>&1); then
+
+        echo "⚠️ Laya 시작 실패: $laya_out"
+        return 1
+    fi
+
+    # Laya 헬스체크 대기 (최대 15초)
+    local retries=15
+    while [ $retries -gt 0 ]; do
+        if curl -s "http://localhost:${LAYA_PORT}/health" &>/dev/null; then
+            echo "🟢 Laya 결정 엔진 정상 가동 확인 (포트 $LAYA_PORT)"
+            break
+        fi
+        sleep 1
+        retries=$((retries - 1))
+    done
+}
 
 generate_litellm_config() {
+    local tier="${1:-gpu}"
+    local callback_entry=""
+    if [ "$tier" != "bypass" ] && [ "$LAYA_ENABLED" != "false" ]; then
+        callback_entry="  callbacks: [\"laya_interceptor.proxy_handler_instance\"]"
+    fi
+
     cat > "$LITELLM_CONFIG" <<YAML
 model_list:
   - model_name: "gpt-4o"
@@ -274,6 +371,7 @@ litellm_settings:
   cache_params:
     type: "local"
     supported_call_types: ["completion", "text_completion"]
+$callback_entry
 
 general_settings:
   master_key: "$LITELLM_MASTER_KEY"
@@ -283,8 +381,14 @@ YAML
 }
 
 launch_litellm() {
-    echo "🚀 liteLLM Proxy 컨테이너 시작 중 (PostgreSQL DB 연동)..."
+    local tier="${1:-gpu}"
+    echo "🚀 liteLLM Proxy 컨테이너 시작 중 (PostgreSQL DB 연동 및 Laya 인터셉터)..."
     docker rm -f "$LITELLM_CONTAINER" &>/dev/null || true
+
+    local laya_flag="$LAYA_ENABLED"
+    if [ "$tier" = "bypass" ]; then
+        laya_flag="false"
+    fi
 
     local litellm_out
     if ! litellm_out=$(docker run -d --name "$LITELLM_CONTAINER" \
@@ -292,8 +396,11 @@ launch_litellm() {
         --add-host host.docker.internal:host-gateway \
         -p ${LITELLM_PORT}:4000 \
         -v "${LITELLM_CONFIG}:/app/config.yaml" \
+        -v "${SCRIPT_DIR}/laya_interceptor.py:/app/laya_interceptor.py:ro" \
         -e "DATABASE_URL=${DATABASE_URL}" \
         -e "LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}" \
+        -e "LAYA_API_URL=http://laya-engine:8000/v1/systemone" \
+        -e "LAYA_ENABLED=${laya_flag}" \
         "$LITELLM_IMAGE" \
         --config /app/config.yaml \
         --port 4000 2>&1); then
@@ -482,11 +589,12 @@ for m in models:
 # --- UI & Model Selection ----------------------------------------------------
 
 show_model_menu() {
-    local container_status litellm_status pg_status status_line env_summary
+    local container_status litellm_status pg_status laya_status status_line env_summary
     container_status=$(get_container_status)
     litellm_status=$(get_litellm_status)
     pg_status=$(get_postgres_status)
-    status_line="PG: $pg_status │ llama.cpp: $container_status │ liteLLM: $litellm_status"
+    laya_status=$(get_laya_status)
+    status_line="PG: $pg_status │ Laya: $laya_status │ llama.cpp: $container_status │ liteLLM: $litellm_status"
     env_summary=$(python3 "$RECOMMENDER" env-summary)
 
     if [ "$DOCKER_GPU_SUPPORT" = "false" ]; then
@@ -661,15 +769,16 @@ launch_model() {
         whiptail --title "❌ Docker 컨테이너 구동 실패" \
             --msgbox "Docker 실행 중 아래 오류가 발생했습니다:\n\n$docker_output\n\n$guide" \
             20 80
-	# launch_model 함수 내부의 docker run 직후에 추가
-	sleep 2
-	if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-		echo "❌ llama.cpp 컨테이너가 시작 직후 비정상 종료되었습니다."
-		echo "【컨테이너 에러 로그】"
-		docker logs "$CONTAINER_NAME"
-		docker rm -f "$CONTAINER_NAME" &>/dev/null || true
-		return 1
-	fi
+        return 1
+    fi
+
+    # 컨테이너 시작 직후 비정상 종료 검증
+    sleep 2
+    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo "❌ llama.cpp 컨테이너가 시작 직후 비정상 종료되었습니다."
+        echo "【컨테이너 에러 로그】"
+        docker logs "$CONTAINER_NAME"
+        docker rm -f "$CONTAINER_NAME" &>/dev/null || true
         return 1
     fi
 
@@ -688,6 +797,7 @@ if db.is_available():
 
 show_launch_success() {
     local choice="$1"
+    local tier="${2:-$LAYA_CURRENT_TIER}"
     local model_info
     model_info=$(python3 "$RECOMMENDER" get-model "$choice")
     local name filename lora_file
@@ -704,6 +814,15 @@ show_launch_success() {
         litellm_msg=""
     fi
 
+    local laya_msg=""
+    local laya_st
+    laya_st=$(get_laya_status)
+    if [[ "$laya_st" != "⚫ OFF" && "$laya_st" != "🔴 STOPPED" ]]; then
+        laya_msg="\n• Laya 엔진:   🟢 $laya_st 모드 (포트 $LAYA_PORT, 사전 가드레일/의도분류 가속)"
+    elif [ "$tier" = "bypass" ]; then
+        laya_msg="\n• Laya 엔진:   ⚪ 바이패스 모드 (비활성)"
+    fi
+
     local mode_msg=""
     if [ "$DOCKER_GPU_SUPPORT" = "false" ]; then
         mode_msg="\n[모드]: CPU 모드 (GPU 툴킷 미설치)"
@@ -716,9 +835,9 @@ show_launch_success() {
         lora_msg="\n• 베이스 모델: $filename\n• LoRA 어댑터: $lora_file (결합 구동)"
     fi
 
-    whiptail --title "✅ 실행 성공 (PostgreSQL 연동 완료)" \
-        --yesno "LLaMA.cpp 및 서비스가 성공적으로 실행되었습니다!\n\n• 모델:       $name${lora_msg}\n• llama.cpp: http://localhost:$PORT\n• PostgreSQL: 🟢 DB 저장 연동 완료 (포트 $POSTGRES_PORT)${mode_msg}${litellm_msg}\n\n컨테이너 실시간 로그를 확인하시겠습니까?\n(종료하려면 Ctrl+C)" \
-        20 78 \
+    whiptail --title "✅ 실행 성공 (PostgreSQL & Laya 연동 완료)" \
+        --yesno "LLaMA.cpp 및 서비스가 성공적으로 실행되었습니다!\n\n• 모델:       $name${lora_msg}\n• llama.cpp:   http://localhost:$PORT\n• PostgreSQL: 🟢 DB 저장 연동 완료 (포트 $POSTGRES_PORT)${laya_msg}${mode_msg}${litellm_msg}\n\n컨테이너 실시간 로그를 확인하시겠습니까?\n(종료하려면 Ctrl+C)" \
+        22 80 \
         --yes-button "Tail Logs" --no-button "Exit"
 }
 
@@ -726,6 +845,36 @@ show_launch_success() {
 
 main() {
     check_prerequisites
+
+    # CLI pre-parsing
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-laya)
+                export LAYA_ENABLED=false
+                echo "ℹ️  Laya 결정 엔진 비활성화 (--no-laya)"
+                shift
+                ;;
+            --laya-status)
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "🧠 Laya 결정 엔진 (System 1) 상태 점검:"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                local l_st
+                l_st=$(get_laya_status)
+                echo "• 컨테이너 상태: $l_st (포트: $LAYA_PORT)"
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${LAYA_CONTAINER}$"; then
+                    echo "• 헬스체크 응답:"
+                    curl -s "http://localhost:${LAYA_PORT}/health" | jq . 2>/dev/null || curl -s "http://localhost:${LAYA_PORT}/health"
+                else
+                    echo "• 현재 가동 중이지 않습니다."
+                fi
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                exit 0
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
 
     # CLI options
     if [ "${1:-}" = "--reload" ] || [ "${1:-}" = "--scan" ]; then
@@ -746,8 +895,8 @@ main() {
     if [ "${1:-}" = "--list" ]; then
         python3 "$RECOMMENDER" env-detail
         echo ""
-        echo "📋 추천 GGUF 모델 TOP 20:"
-        python3 "$RECOMMENDER" recommend | jq -r '.[] | "• \(.name) (\(.size_gb)GB) [\(.offload_tag)] - \(.category): \(.desc) (다운로드 여부: \(.is_downloaded))"'
+        echo "📋 추천 GGUF 모델 전체 목록 (하드웨어 적합도 순):"
+        python3 "$RECOMMENDER" recommend | jq -r 'to_entries[] | "  \(.key + 1). \(.value.name) (\(.value.size_gb)GB) [\(.value.offload_tag)] - \(.value.category): \(.value.desc) (다운로드 여부: \(.value.is_downloaded))"'
         exit 0
     fi
 
@@ -802,11 +951,19 @@ main() {
             python3 "$RECOMMENDER" download "$direct_choice"
         fi
 
+        # Determine Laya Smart Tier
+        local tier_json laya_tier laya_reason
+        tier_json=$(python3 "$RECOMMENDER" laya-tier "$direct_choice")
+        laya_tier=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('tier', 'cpu'))" "$tier_json")
+        laya_reason=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('reason', ''))" "$tier_json")
+        echo "🧠 Laya 스마트 3-Tier 결정: [$laya_tier] $laya_reason"
+
         stop_existing_container
         launch_model "$direct_choice"
-        generate_litellm_config
-        launch_litellm || true
-        echo "✅ 모델 구동 완료! llama.cpp: http://localhost:$PORT | liteLLM: http://localhost:$LITELLM_PORT"
+        launch_laya "$laya_tier" || true
+        generate_litellm_config "$laya_tier"
+        launch_litellm "$laya_tier" || true
+        echo "✅ 모델 구동 완료! llama.cpp: http://localhost:$PORT | Laya: http://localhost:$LAYA_PORT ($laya_tier) | liteLLM: http://localhost:$LITELLM_PORT"
         exit 0
     fi
 
@@ -838,9 +995,13 @@ main() {
 
         # Handle model launch
         if confirm_and_prepare_model "$choice"; then
+            local tier_json laya_tier laya_reason
+            tier_json=$(python3 "$RECOMMENDER" laya-tier "$choice")
+            laya_tier=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('tier', 'cpu'))" "$tier_json")
+            laya_reason=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('reason', ''))" "$tier_json")
+
             if ask_litellm_option; then
                 use_litellm=true
-                generate_litellm_config
             else
                 use_litellm=false
             fi
@@ -849,11 +1010,14 @@ main() {
             launch_model "$choice" || exit 1
 
             if [[ "$use_litellm" == "true" ]]; then
+                echo "🧠 Laya 스마트 3-Tier 결정: [$laya_tier] $laya_reason"
+                launch_laya "$laya_tier" || true
+                generate_litellm_config "$laya_tier"
                 sleep 2
-                launch_litellm || true
+                launch_litellm "$laya_tier" || true
             fi
 
-            if show_launch_success "$choice"; then
+            if show_launch_success "$choice" "$laya_tier"; then
                 echo ""
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo "Container logs (Ctrl+C to stop tailing):"

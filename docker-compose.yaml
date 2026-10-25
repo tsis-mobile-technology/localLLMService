@@ -24,6 +24,31 @@ services:
       timeout: 3s
       retries: 10
 
+  laya:
+    image: local-laya:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.laya
+    container_name: laya-engine
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      LAYA_DEVICE: ${LAYA_DEVICE:-auto}
+      LAYA_PRELOAD: 1
+      LAYA_MODELS: "multilingual,english"
+      HF_HOME: /root/.cache/huggingface
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    networks:
+      - local-llm-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
 networks:
   local-llm-net:
     name: local-llm-net

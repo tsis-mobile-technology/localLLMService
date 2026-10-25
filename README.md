@@ -33,6 +33,16 @@
 - **서버 런타임 수명주기 (`server_runtime_logs`)**: 컨테이너 시작/정상종료/에러 상태, GPU 오프로드 프로파일, 가동 시간(분) 추적 (LoRA 결합 상세 표기)
 - **LiteLLM 사용자 및 사용량 감사 (`LiteLLM_UserTable`, `LiteLLM_SpendLogs`)**: 사용자별 API Key 발급 및 토큰 사용량(Prompt/Completion), 지연시간(Latency) DB 실시간 적재
 
+### 🧠 Laya 초고속 결정 엔진 (System 1) & 3-Tier 자동 전환 (NEW!)
+- **초경량 이중 의사결정 모델 (Fast Interceptor)**: LiteLLM `Pre-call Hook`을 통해 메인 LLM 호출 직전(~30ms) 보안 검문, 카테고리 분류, 긴급도 평가 수행
+- **선제적 보안 가드레일 (Zero-Token Guardrail)**: 프롬프트 탈옥, 지침 무시 공격 감지 시 메인 LLM 토큰 낭비 없이 `HTTP 400`으로 즉각 차단
+- **동적 프롬프트 & 파라미터 최적화**: 코딩(Temp 0.1), 고객 지원(Temp 0.3), 일반 대화(Temp 0.7)에 맞춰 시스템 프롬프트 및 온도를 실시간 자동 조정
+- **하드웨어 인지형 스마트 3-Tier 자동 전환**:
+  - **Tier 1 (GPU/CUDA)**: VRAM 여유 $\ge$ 2.5GB 확보 시 GPU 완전 가속 (~30ms)
+  - **Tier 2 (CPU + 78GB RAM)**: VRAM 여유 부족 시 호스트 CPU + RAM으로 자동 오프로드 (0GB VRAM 소모로 메인 LLM OOM 원천 방지)
+  - **Tier 3 (Bypass / Fail-Open)**: Laya 장애 발생 또는 `--no-laya` 지정 시 메인 LLM으로 안전 무중단 바이패스
+- **한국어/다국어 & 영어 자동 라우팅**: 한글/비라틴 문자는 `laya-multilingual` (322M), 영어는 `laya` (305M)로 자동 라우팅 로드
+
 ### 💎 LiteLLM 프록시 & 다중 사용자 관리
 - **OpenAI 호환 API**: `:4000/v1` 엔드포인트 제공 (`/v1/chat/completions`, `/v1/models` 등)
 - **다중 사용자 및 API Key 발급**: 사용자별 독립된 API Key 및 월간 예산(`max_budget`) 한도 설정 지원
@@ -87,17 +97,24 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ./docker_run.sh 6    # Qwen3.5 9B 등 추천 모델 구동
 ```
 
-### 4️⃣ CLI 실시간 통계, 이력, 백업 및 복구
+### 4️⃣ CLI 실시간 통계, Laya 상태, 백업 및 복구
 ```bash
-./docker_run.sh --reload    # 모델 저장소(~/Projects/models) 즉시 재스캔 및 감지 모델 요약
-./docker_run.sh --hf-check  # Hugging Face API 연동 상태 및 계정 확인
-./docker_run.sh --stats     # LiteLLM 토큰 소비량 및 평균 레이턴시 통계
-./docker_run.sh --users     # 등록된 사용자 및 활성 API Key 목록
-./docker_run.sh --history   # 모델 다운로드 및 서버 구동/종료 이력
-./docker_run.sh --backup    # PostgreSQL DB 즉시 백업 (backups/ 저장)
-./docker_run.sh --restore   # 최신 백업본으로부터 DB 데이터 복원
-./docker_run.sh --env       # 감지된 PC 하드웨어 환경 상세
-./docker_run.sh --list      # 보유 모델 및 추천 모델 전체 목록 출력
+./docker_run.sh --laya-status # Laya 초고속 결정 엔진 상태 점검 (GPU/CPU 티어 및 헬스체크)
+./docker_run.sh --no-laya 1   # Laya 결정 엔진을 구동하지 않고 LLM 단독 실행 (Tier 3)
+./docker_run.sh --reload      # 모델 저장소(~/Projects/models) 즉시 재스캔 및 감지 모델 요약
+./docker_run.sh --hf-check    # Hugging Face API 연동 상태 및 계정 확인
+./docker_run.sh --stats       # LiteLLM 토큰 소비량 및 평균 레이턴시 통계
+./docker_run.sh --users       # 등록된 사용자 및 활성 API Key 목록
+./docker_run.sh --history     # 모델 다운로드 및 서버 구동/종료 이력
+./docker_run.sh --backup      # PostgreSQL DB 즉시 백업 (backups/ 저장)
+./docker_run.sh --restore     # 최신 백업본으로부터 DB 데이터 복원
+./docker_run.sh --env         # 감지된 PC 하드웨어 환경 상세
+./docker_run.sh --list        # 보유 모델 및 추천 모델 전체 목록 출력
+
+# API 테스트 쿼리 전송 (3가지 모드 지원)
+./test_curl.sh "파이썬 소수 판별 함수 작성해줘"           # 1. 기본: LiteLLM(:4000) + Laya 결정 엔진 가동
+./test_curl.sh --no-laya "파이썬 소수 판별 함수 작성해줘"  # 2. 프록시 경유하되 Laya만 우회 (skip_laya=True)
+./test_curl.sh --direct "파이썬 소수 판별 함수 작성해줘"   # 3. LLaMA.cpp 백엔드(:8080) 직접 호출 (순수 엔진 테스트)
 ```
 
 ### 5️⃣ 서비스 정상 종료 및 자동 백업/복원
@@ -354,8 +371,34 @@ curl http://localhost:4000/v1/chat/completions \
 
 | 서비스 | 이미지 | 포트 | 용도 |
 |--------|--------|------|------|
-| **llama.cpp** | `ghcr.io/ggml-org/llama.cpp:server-cuda` | 8080 | LLM 추론 |
-| **liteLLM** | `ghcr.io/berriai/litellm:main-latest` | 4000 | 프록시 & 캐싱 |
+| **llama.cpp** | `ghcr.io/ggml-org/llama.cpp:server-cuda` | 8080 | System 2: 메인 고차원 추론 및 텍스트 생성 |
+| **laya** | `local-laya:latest` (`python:3.11-slim`) | 8001 | System 1: 초고속 보안 검문, 분류, 긴급도 평가 |
+| **liteLLM** | `ghcr.io/berriai/litellm:main-latest` | 4000 | OpenAI 호환 프록시, Laya 인터셉터, DB 로깅 |
+| **postgres** | `postgres:16-alpine` | 5432 | 사용자, 토큰 감사 로그, 모델 카탈로그 영구 저장 |
+
+---
+
+## 🏗️ vLLM / LLaMA.cpp + LiteLLM + Laya 통합 아키텍처
+
+```text
+[Client / App] ──(OpenAI 호환 요청)──▶ [LiteLLM Proxy (:4000)]
+                                              │
+          ┌───────────────────────────────────┴───────────────────────────────────┐
+          ▼ (1. Pre-call Hook: ~30-50ms)                                          ▼ (2. 동적 시스템 프롬프트 & 온도로 메인 추론)
+[Laya Decision Engine (:8001)]                                          [LLaMA.cpp / vLLM Server (:8080)]
+ - 한국어/다국어 자동 감지 (mmBERT 322M)                                 - PagedAttention / GPU 최적화 생성 모델
+ - 가드레일 판별 (위험 시 HTTP 400 차단 응답 반환)                        - Laya가 주입한 최적 시스템 프롬프트 및
+ - 의도 분류 (Coding / CS / General) 및 긴급도 산출                        온도(0.1~0.7)로 고품질 텍스트 생성 수행
+```
+
+### 🧠 스마트 3-Tier 하드웨어 적응형 자동 전환 체계
+로컬 PC 하드웨어(GPU VRAM, CPU, 호스트 RAM) 상태와 사용자가 선택한 모델 크기를 실시간 계산하여 자동으로 최적 구동 모드를 결정합니다:
+
+| 티어 (Tier) | 구동 환경 | VRAM 소모 | 조건 및 특성 |
+|---|---|---|---|
+| **Tier 1: GPU** | NVIDIA CUDA (RTX 3060) | ~1.5 GB | VRAM 여유 $\ge$ 2.0GB (소/중/준대형 모델: Gemma 4B, Qwen 1.5B/9B, DeepSeek 14B). 초고속 응답 (~30ms) |
+| **Tier 2: CPU+RAM** | 12 vCPU + 78GB RAM | **0 GB (VRAM 보존)** | VRAM 여유 $<$ 2.0GB (초대형 모델: Qwen 27B, DeepSeek 32B 등). **메인 LLM의 GPU OOM 원천 방지** |
+| **Tier 3: Bypass** | 비활성화 (Bypass) | 0 GB | `--no-laya` 옵션 또는 장애 발생 시 자동 Fail-Open 전환으로 메인 LLM 서비스 무중단 지속 |
 
 ---
 

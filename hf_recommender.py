@@ -217,6 +217,70 @@ LOCAL_MODELS = [
 # Curated High-Quality Unsloth GGUF Models with verified Hugging Face CDN links
 UNSLOTH_CATALOG = [
     {
+        "id": "qwen3.8-27b-q4",
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "name": "Qwen3.8 27B (UD-Q4_K_M)",
+        "filename": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+        "quant": "UD-Q4_K_M",
+        "size_gb": 15.33,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "27B",
+        "category": "최신 Qwen3.8 플래그십",
+        "desc": "HF 665만 DL 1위! 최신 Qwen3.8 27B 정밀 4-bit / RTX 3060 12GB+78GB RAM 하이브리드 최적",
+        "base_priority": 105,
+        "args": "-ngl 28 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "qwen3.8-27b-100gpu",
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "name": "Qwen3.8 27B (UD-Q2_K_XL · 100% GPU)",
+        "filename": "Qwen3.8-27B-UD-Q2_K_XL.gguf",
+        "quant": "UD-Q2_K_XL",
+        "size_gb": 9.15,
+        "min_vram_gb": 10.5,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "27B",
+        "category": "Qwen3.8 27B (100% GPU)",
+        "desc": "Unsloth Dynamic 2.0 양자화 / 27B 대형 모델을 RTX 3060 12GB VRAM에 100% 단독 풀로드",
+        "base_priority": 104,
+        "args": "-ngl 99 -c 8192 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "qwen3.8-9b-distill",
+        "repo": "empero-ai/Qwen3.8-9B-Distill-GGUF",
+        "name": "Qwen3.8 9B Distill",
+        "filename": "Qwen3.8-9B-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 5.38,
+        "min_vram_gb": 7.0,
+        "recommended_vram_gb": 10.0,
+        "type": "dense",
+        "active_params": "9B",
+        "category": "최신 Qwen3.8 (100% GPU)",
+        "desc": "Qwen3.8 추론 지능 9B 증류 모델 / 12GB VRAM 100% GPU 초고속 구동 (32K context)",
+        "base_priority": 103,
+        "args": "-ngl 99 -c 32768 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0"
+    },
+    {
+        "id": "qwen3.8-35b-a3b-moe",
+        "repo": "empero-ai/Qwen3.8-35B-A3B-Distill-GGUF",
+        "name": "Qwen3.8 35B-A3B MoE Distill",
+        "filename": "Qwen3.8-35B-A3B-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 20.22,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "moe",
+        "active_params": "3B",
+        "category": "최신 Qwen3.8 MoE",
+        "desc": "총 35B 중 활성 3B MoE / RTX 3060 12GB+78GB RAM 환경에서 3B 속도로 35B 지능 구현",
+        "base_priority": 102,
+        "args": "-ngl 20 --n-cpu-moe 12 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
         "id": "qwen3.5-9b",
         "repo": "unsloth/Qwen3.5-9B-GGUF",
         "name": "Qwen3.5 9B",
@@ -231,6 +295,70 @@ UNSLOTH_CATALOG = [
         "desc": "Alibaba 최신 9B 초고성능 모델 / 32K context 지원 / 범용 최상급 검증 완료",
         "base_priority": 100,
         "args": "-ngl 99 -c 32768 --flash-attn on -ctk q8_0 -ctv q8_0 -b 2048 -ub 512"
+    },
+    {
+        "id": "qwen3.6-27b",
+        "repo": "unsloth/Qwen3.6-27B-GGUF",
+        "name": "Qwen3.6 27B",
+        "filename": "Qwen3.6-27B-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 15.66,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "27B",
+        "category": "27B 고지능 추론",
+        "desc": "Unsloth Qwen3.6 27B Dense 모델 / 15.7GB / GPU+78GB RAM 하이브리드 구동",
+        "base_priority": 99,
+        "args": "-ngl 28 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "lfm2.5-24b-a2b-moe",
+        "repo": "unsloth/LFM2.5-24B-A2B-GGUF",
+        "name": "Liquid LFM2.5 24B-A2B MoE",
+        "filename": "LFM2.5-24B-A2B-UD-Q4_K_XL.gguf",
+        "quant": "UD-Q4_K_XL",
+        "size_gb": 13.86,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "moe",
+        "active_params": "2B",
+        "category": "초고속 24B MoE",
+        "desc": "2026.10 최신 Liquid AI 24B MoE (활성 2B!) / 13.9GB / GPU+RAM 초고속 응답",
+        "base_priority": 99,
+        "args": "-ngl 26 --n-cpu-moe 8 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "nemotron-3.5-lightning-30b-moe",
+        "repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+        "name": "NVIDIA Nemotron 3.5 Lightning 30B-A3B",
+        "filename": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "quant": "UD-Q4_K_M",
+        "size_gb": 23.53,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "moe",
+        "active_params": "3B",
+        "category": "NVIDIA 30B MoE",
+        "desc": "NVIDIA 최신 Nemotron 3.5 Lightning (활성 3B MoE) / 1M 컨텍스트 지원 / GPU+78GB RAM",
+        "base_priority": 98,
+        "args": "-ngl 18 --n-cpu-moe 14 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
+    },
+    {
+        "id": "gpt-oss-20b",
+        "repo": "unsloth/gpt-oss-20b-GGUF",
+        "name": "OpenAI gpt-oss 20B",
+        "filename": "gpt-oss-20b-Q4_K_M.gguf",
+        "quant": "Q4_K_M",
+        "size_gb": 10.83,
+        "min_vram_gb": 8.0,
+        "recommended_vram_gb": 12.0,
+        "type": "dense",
+        "active_params": "20B",
+        "category": "OpenAI 오픈웨이트 20B",
+        "desc": "OpenAI 오픈웨이트 20B (10.8GB) / RTX 3060 12GB VRAM 대부분 오프로드 + RAM 보조",
+        "base_priority": 98,
+        "args": "-ngl 32 -c 16384 --cache-type-k q4_0 --cache-type-v q4_0"
     },
     {
         "id": "qwen2.5-coder-32b",
@@ -875,7 +1003,7 @@ def score_and_rank_models(hw, models_dir):
 
     # Sort descending by score
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:25]
+    return scored[:35]
 
 
 def format_whiptail_menu_items(models):
@@ -888,6 +1016,62 @@ def format_whiptail_menu_items(models):
         items.append(str(idx))
         items.append(item_label)
     return items
+
+
+def determine_laya_tier(model_info, hw=None):
+    """
+    Determines the execution tier for Laya based on hardware specs and the selected model.
+    Tiers:
+      - 'gpu' (Tier 1): VRAM headroom >= 2.0 GB (Laya ~1.5GB + 0.5GB buffer). Runs on GPU (~30ms).
+      - 'cpu' (Tier 2): VRAM headroom < 2.0 GB. Offloads to host 78GB RAM on CPU (~50ms), 0GB VRAM used.
+      - 'bypass' (Tier 3): Explicitly disabled or no capacity.
+    """
+    if os.environ.get("LAYA_ENABLED", "true").lower() in ("false", "0", "no", "off"):
+        return {
+            "tier": "bypass",
+            "device": "none",
+            "reason": "사용자 또는 환경설정에 의해 Laya가 비활성화됨 (--no-laya)",
+            "headroom_gb": 0.0
+        }
+
+    if hw is None:
+        hw = detect_hardware()
+
+    total_vram = hw["gpu"]["total_vram_gb"]
+    if total_vram <= 0:
+        return {
+            "tier": "cpu",
+            "device": "cpu",
+            "reason": "GPU 미장착 시스템: CPU + 시스템 RAM 모드로 실행",
+            "headroom_gb": 0.0
+        }
+
+    # Realistic model VRAM estimation:
+    # Model weight size + 1.2GB for realistic quantized KV Cache (8K context with --cache-type-k q4_0)
+    size_gb = float(model_info.get("size_gb") or model_info.get("min_vram_gb", 5.0))
+    if size_gb >= total_vram - 1.0:
+        estimated_llm_vram = total_vram
+    else:
+        estimated_llm_vram = round(size_gb + 1.2, 1)
+
+    # Calculate realistic available VRAM headroom after loading the LLM
+    headroom = round(total_vram - estimated_llm_vram, 2)
+
+    # Laya needs ~1.5GB VRAM. 2.0GB headroom provides Laya + 0.5GB extra margin (Total KV margin: 1.7GB)
+    if headroom >= 2.0:
+        return {
+            "tier": "gpu",
+            "device": "cuda",
+            "reason": f"VRAM 여유 {headroom:.1f}GB 확보 (Tier 1: 100% GPU 초고속 모드, 약 30ms)",
+            "headroom_gb": headroom
+        }
+    else:
+        return {
+            "tier": "cpu",
+            "device": "cpu",
+            "reason": f"VRAM 잔여({headroom:.1f}GB) 부족으로 GPU OOM 방지 (Tier 2: 호스트 78GB RAM + CPU 모드 자동 전환, 0GB VRAM 소모)",
+            "headroom_gb": headroom
+        }
 
 
 def print_detailed_environment(hw):
@@ -1289,6 +1473,30 @@ def main():
             print(f"  {idx:2d}. {m['name']} ({m['size_gb']}GB) [{tag}]")
             print(f"      파일명: {m['filename']} │ 분류: {cat}")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    # 12. Determine Laya Smart Tier
+    elif cmd == "laya-tier":
+        if len(sys.argv) < 3:
+            print("Usage: hf_recommender.py laya-tier <1-based index or model-id>")
+            sys.exit(1)
+        target = sys.argv[2]
+        hw = detect_hardware()
+        top10 = score_and_rank_models(hw, models_dir)
+        target_model = None
+        if target.isdigit():
+            idx = int(target) - 1
+            if 0 <= idx < len(top10):
+                target_model = top10[idx]
+        else:
+            for m in top10:
+                if m.get("id") == target:
+                    target_model = m
+                    break
+        if not target_model:
+            target_model = {"recommended_vram_gb": 6.5, "name": "Default Model"}
+        tier_info = determine_laya_tier(target_model, hw)
+        print(json.dumps(tier_info, ensure_ascii=False))
+        sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    LAYA_HOST=0.0.0.0 \
+    LAYA_PORT=8000 \
+    LAYA_DEVICE=auto \
+    LAYA_PRELOAD=1 \
+    LAYA_MODELS=multilingual,english \
+    HF_HOME=/root/.cache/huggingface
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch with CUDA support (also runs seamlessly on CPU when LAYA_DEVICE=cpu)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 \
+    && pip install --no-cache-dir "laya[serve]"
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=10 --start-period=15s \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+ENTRYPOINT ["laya-serve"]

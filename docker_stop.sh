@@ -26,15 +26,18 @@ if [ "${1:-}" != "--skip-backup" ] && [ -f "$SCRIPT_DIR/db_manager.py" ] && dock
     python3 "$SCRIPT_DIR/db_manager.py" backup || true
 fi
 
-# 3. Stop and remove litellm-proxy and llama-server containers
+# 3. Stop and remove litellm-proxy, laya-engine, and llama-server containers
 docker stop litellm-proxy 2>/dev/null || true
 docker rm -f litellm-proxy 2>/dev/null || true
+
+docker stop laya-engine 2>/dev/null || true
+docker rm -f laya-engine 2>/dev/null || true
 
 docker stop llama-server 2>/dev/null || true
 docker rm -f llama-server 2>/dev/null || true
 
 echo ""
-echo "✓ LLaMA.cpp 및 LiteLLM 컨테이너가 정상 종료되었습니다."
+echo "✓ LLaMA.cpp, Laya 결정엔진 및 LiteLLM 컨테이너가 정상 종료되었습니다."
 if [ -f "$SCRIPT_DIR/backups/litellm_backup_latest.sql" ]; then
     size=$(du -h "$SCRIPT_DIR/backups/litellm_backup_latest.sql" 2>/dev/null | awk '{print $1}')
     echo "💾 PostgreSQL DB가 'backups/litellm_backup_latest.sql' ($size)에 최신 백업되었습니다."
