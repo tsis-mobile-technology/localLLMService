@@ -1100,10 +1100,10 @@ main() {
             if show_launch_success "$choice" "$laya_tier"; then
                 echo ""
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "Container logs (Ctrl+C to stop tailing):"
+                echo "📋 Container logs (Ctrl+C to stop tailing): $CONTAINER_NAME"
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo ""
-                docker logs -f "$CONTAINER_NAME" 2>/dev/null || true
+                docker logs -f "$CONTAINER_NAME" || true
             fi
 
             exit 0

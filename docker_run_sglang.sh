@@ -516,7 +516,7 @@ main() {
         # Wait for SGLang to be ready
         if ! wait_for_sglang; then
             echo "Showing SGLang server logs:"
-            docker logs "$CONTAINER_NAME" | tail -n 50
+            docker logs "$CONTAINER_NAME" 2>&1 | tail -n 50
             exit 1
         fi
 
@@ -564,7 +564,7 @@ main() {
                     --msgbox "SGLang failed to start or load the model.\n\nShowing container logs..." \
                     10 60
                 echo "Showing SGLang server logs:"
-                docker logs "$CONTAINER_NAME" | tail -n 50
+                docker logs "$CONTAINER_NAME" 2>&1 | tail -n 50
                 exit 1
             fi
 
@@ -581,7 +581,7 @@ main() {
                 echo "Container logs (Ctrl+C to stop tailing):"
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo ""
-                docker logs -f "$CONTAINER_NAME" 2>/dev/null || true
+                docker logs -f "$CONTAINER_NAME" || true
             fi
 
             exit 0
