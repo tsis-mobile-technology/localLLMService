@@ -1,5 +1,8 @@
 # Large model files
 *.gguf
+*.safetensors
+custom_laya_model/*
+!custom_laya_model/.gitkeep
 
 # Python virtual environment
 venv/

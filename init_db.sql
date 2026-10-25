@@ -54,8 +54,28 @@ CREATE TABLE IF NOT EXISTS server_runtime_logs (
     stopped_at TIMESTAMP WITH TIME ZONE
 );
 
+-- 4. Laya System 1 결정 엔진 판단 및 감사 로그 테이블
+CREATE TABLE IF NOT EXISTS laya_decision_logs (
+    id SERIAL PRIMARY KEY,
+    user_prompt TEXT NOT NULL,
+    security_choice VARCHAR(32),
+    security_confidence NUMERIC(5, 4),
+    category_choice VARCHAR(64),
+    category_confidence NUMERIC(5, 4),
+    urgency_score NUMERIC(5, 4),
+    assigned_temperature NUMERIC(3, 2),
+    assigned_system_prompt TEXT,
+    latency_ms NUMERIC(7, 2),
+    routing_model VARCHAR(32),
+    bypassed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 인덱스 생성
 CREATE INDEX IF NOT EXISTS idx_downloads_status ON model_downloads(status);
 CREATE INDEX IF NOT EXISTS idx_downloads_started ON model_downloads(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runtime_status ON server_runtime_logs(status);
 CREATE INDEX IF NOT EXISTS idx_runtime_started ON server_runtime_logs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_laya_created ON laya_decision_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_laya_category ON laya_decision_logs(category_choice);
+CREATE INDEX IF NOT EXISTS idx_laya_security ON laya_decision_logs(security_choice);

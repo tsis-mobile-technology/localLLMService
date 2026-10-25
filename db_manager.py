@@ -453,6 +453,134 @@ class DBManager:
         except Exception:
             return True
 
+    def log_laya_decision(self, user_prompt, security_choice, security_confidence,
+                          category_choice, category_confidence, urgency_score,
+                          assigned_temperature, assigned_system_prompt,
+                          latency_ms, routing_model="multilingual", bypassed=False):
+        """Records a single Laya decision to the laya_decision_logs table."""
+        if not self.is_available():
+            return False
+        sql = f"""
+        INSERT INTO laya_decision_logs 
+        (user_prompt, security_choice, security_confidence, category_choice, 
+         category_confidence, urgency_score, assigned_temperature, 
+         assigned_system_prompt, latency_ms, routing_model, bypassed)
+        VALUES (
+            {self._escape(user_prompt[:2000])},
+            {self._escape(security_choice)},
+            {float(security_confidence or 0.0)},
+            {self._escape(category_choice)},
+            {float(category_confidence or 0.0)},
+            {float(urgency_score or 0.0)},
+            {float(assigned_temperature or 0.7)},
+            {self._escape(assigned_system_prompt or '')},
+            {float(latency_ms or 0.0)},
+            {self._escape(routing_model or 'multilingual')},
+            {'TRUE' if bypassed else 'FALSE'}
+        );
+        """
+        ok, _, _ = self.execute(sql)
+        return ok
+
+    def get_laya_stats(self):
+        """Returns aggregated statistics of Laya decision logs."""
+        if not self.is_available() or not self._has_table("laya_decision_logs"):
+            return {"total_decisions": 0, "categories": {}, "unsafe_count": 0, "avg_latency_ms": 0.0, "avg_confidence": 0.0}
+
+        try:
+            total_res = self.query_json("SELECT count(*) as total, coalesce(avg(latency_ms), 0) as avg_latency, coalesce(avg(category_confidence), 0) as avg_conf FROM laya_decision_logs WHERE bypassed = FALSE;")
+            total = int(total_res[0].get("total", 0)) if total_res else 0
+            avg_lat = float(total_res[0].get("avg_latency", 0.0)) if total_res else 0.0
+            avg_conf = float(total_res[0].get("avg_conf", 0.0)) if total_res else 0.0
+
+            unsafe_res = self.query_json("SELECT count(*) as unsafe_cnt FROM laya_decision_logs WHERE security_choice = 'UNSAFE';")
+            unsafe_cnt = int(unsafe_res[0].get("unsafe_cnt", 0)) if unsafe_res else 0
+
+            cat_res = self.query_json("SELECT category_choice, count(*) as cnt, round(avg(category_confidence)::numeric, 4) as avg_conf FROM laya_decision_logs WHERE category_choice IS NOT NULL GROUP BY category_choice ORDER BY cnt DESC;")
+            categories = {r["category_choice"]: {"count": int(r["cnt"]), "avg_confidence": float(r.get("avg_conf", 0.0))} for r in (cat_res or [])}
+
+            bypassed_res = self.query_json("SELECT count(*) as bypassed_cnt FROM laya_decision_logs WHERE bypassed = TRUE;")
+            bypassed_cnt = int(bypassed_res[0].get("bypassed_cnt", 0)) if bypassed_res else 0
+
+            return {
+                "total_decisions": total,
+                "categories": categories,
+                "unsafe_blocked_count": unsafe_cnt,
+                "bypassed_count": bypassed_cnt,
+                "avg_latency_ms": round(avg_lat, 2),
+                "avg_category_confidence": round(avg_conf, 4)
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def get_laya_recent_logs(self, limit=20):
+        """Fetches recent decisions from laya_decision_logs."""
+        if not self.is_available() or not self._has_table("laya_decision_logs"):
+            return []
+        sql = f"""
+        SELECT id, user_prompt, security_choice, security_confidence,
+               category_choice, category_confidence, urgency_score,
+               assigned_temperature, latency_ms, routing_model, bypassed,
+               to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at
+        FROM laya_decision_logs
+        ORDER BY created_at DESC
+        LIMIT {int(limit)};
+        """
+        return self.query_json(sql) or []
+
+    def export_laya_dataset(self, out_path, category=None, min_confidence=0.7, limit=5000):
+        """
+        Exports decision logs to CSV or JSONL formatted for laya-train fine-tuning.
+        Supports filtering by category and min_confidence.
+        """
+        if not self.is_available() or not self._has_table("laya_decision_logs"):
+            return False, 0, "DB unavailable or table missing"
+
+        where_clauses = ["bypassed = FALSE", f"category_confidence >= {float(min_confidence)}"]
+        if category:
+            where_clauses.append(f"category_choice = {self._escape(category)}")
+
+        where_sql = " AND ".join(where_clauses)
+        sql = f"""
+        SELECT user_prompt as text, category_choice as label, category_confidence, urgency_score
+        FROM laya_decision_logs
+        WHERE {where_sql}
+        ORDER BY created_at DESC
+        LIMIT {int(limit)};
+        """
+        rows = self.query_json(sql) or []
+        if not rows:
+            return False, 0, "No records match criteria"
+
+        out_file = Path(out_path)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+
+        if out_path.lower().endswith(".csv"):
+            import csv
+            with open(out_file, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["text", "label"])
+                writer.writeheader()
+                for r in rows:
+                    writer.writerow({"text": r["text"], "label": r["label"]})
+        else:
+            # JSONL export
+            with open(out_file, "w", encoding="utf-8") as f:
+                for r in rows:
+                    item = {
+                        "state": r["text"],
+                        "questions": {
+                            "task_category": {
+                                "type": "choice",
+                                "instructions": "사용자 질문의 주요 성격을 분류하세요.",
+                                "criteria": ["coding", "cs_ticket", "general"]
+                            }
+                        },
+                        "expected": {"task_category": r["label"]}
+                    }
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+        return True, len(rows), str(out_file)
+
     def auto_restore_if_empty(self, backup_file=None):
         """
         Restores database only if current DB is empty and a valid backup file exists.
@@ -516,6 +644,56 @@ def main():
         ok, status = db.auto_restore_if_empty()
         print(f"AUTO_RESTORE_RESULT: {status}")
         sys.exit(0 if ok else 1)
+    elif cmd == "laya-stats":
+        stats = db.get_laya_stats()
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("📊 Laya System 1 결정 엔진 누적 통계 (PostgreSQL):")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"• 총 결정 수행 건수 : {stats.get('total_decisions', 0)} 건 (우회: {stats.get('bypassed_count', 0)} 건)")
+        print(f"• 보안 정책 차단 건수 : {stats.get('unsafe_blocked_count', 0)} 건 (UNSAFE)")
+        print(f"• 평균 판별 지연시간 : {stats.get('avg_latency_ms', 0.0):.2f} ms")
+        print(f"• 평균 분류 신뢰도   : {stats.get('avg_category_confidence', 0.0) * 100:.1f} %")
+        print("• 카테고리별 분포:")
+        cats = stats.get("categories", {})
+        if not cats:
+            print("  - 기록된 판단 데이터가 아직 없습니다.")
+        else:
+            for cat, cinfo in cats.items():
+                print(f"  - [{cat:<10}] {cinfo['count']:>4} 건 (평균 신뢰도: {cinfo['avg_confidence']*100:.1f}%)")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    elif cmd == "laya-logs":
+        limit = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+        logs = db.get_laya_recent_logs(limit)
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"📋 Laya 최근 판별 이력 (최대 {limit}건):")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        if not logs:
+            print("  기록된 이력이 없습니다.")
+        else:
+            for r in logs:
+                sec = f"🚨{r['security_choice']}" if r.get("security_choice") == "UNSAFE" else "🟢SAFE"
+                cat = f"[{r.get('category_choice')}]" if r.get('category_choice') else "[BYPASS]"
+                conf = f"신뢰도:{float(r.get('category_confidence') or 0)*100:.0f}%"
+                urg = f"긴급도:{float(r.get('urgency_score') or 0):.1f}"
+                lat = f"{float(r.get('latency_ms') or 0):.1f}ms"
+                time_str = r.get("created_at", "")
+                prompt_preview = (r.get("user_prompt") or "")[:35].replace("\n", " ")
+                print(f"[{time_str}] {sec} {cat:<10} {conf} {urg} ({lat}) │ \"{prompt_preview}...\"")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    elif cmd == "laya-export":
+        if len(sys.argv) < 3:
+            print("Usage: db_manager.py laya-export <output.csv or output.jsonl> [category] [min_confidence]")
+            sys.exit(1)
+        out_path = sys.argv[2]
+        cat = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "all" else None
+        min_conf = float(sys.argv[4]) if len(sys.argv) > 4 else 0.7
+        ok, cnt, msg = db.export_laya_dataset(out_path, category=cat, min_confidence=min_conf)
+        if ok:
+            print(f"✅ 데이터셋 추출 완료: {cnt}개 레코드 저장됨 -> {msg}")
+            sys.exit(0)
+        else:
+            print(f"❌ 데이터셋 추출 실패: {msg}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

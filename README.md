@@ -99,8 +99,15 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 
 ### 4️⃣ CLI 실시간 통계, Laya 상태, 백업 및 복구
 ```bash
+# Laya 초고속 결정 엔진 모니터링 & 파인튜닝 (NEW!)
 ./docker_run.sh --laya-status # Laya 초고속 결정 엔진 상태 점검 (GPU/CPU 티어 및 헬스체크)
+./docker_run.sh --laya-stats  # Laya 누적 판별 통계 (수행 건수, 차단율, 평균 지연시간, 평균 신뢰도, 카테고리 분포)
+./docker_run.sh --laya-logs   # Laya 최근 판별 이력 및 라우팅 결과 실시간 조회 (기본 20건)
+./docker_run.sh --laya-export data/laya_train.csv # DB에 적재된 판별 로그를 파인튜닝용 데이터셋으로 내보내기
+./docker_run.sh --train-laya  # Laya 로컬 파인튜닝 실행 (샘플 또는 추출 데이터셋 기반 초경량 학습)
 ./docker_run.sh --no-laya 1   # Laya 결정 엔진을 구동하지 않고 LLM 단독 실행 (Tier 3)
+
+# 플랫폼 통합 관리
 ./docker_run.sh --reload      # 모델 저장소(~/Projects/models) 즉시 재스캔 및 감지 모델 요약
 ./docker_run.sh --hf-check    # Hugging Face API 연동 상태 및 계정 확인
 ./docker_run.sh --stats       # LiteLLM 토큰 소비량 및 평균 레이턴시 통계
@@ -399,6 +406,22 @@ curl http://localhost:4000/v1/chat/completions \
 | **Tier 1: GPU** | NVIDIA CUDA (RTX 3060) | ~1.5 GB | VRAM 여유 $\ge$ 2.0GB (소/중/준대형 모델: Gemma 4B, Qwen 1.5B/9B, DeepSeek 14B). 초고속 응답 (~30ms) |
 | **Tier 2: CPU+RAM** | 12 vCPU + 78GB RAM | **0 GB (VRAM 보존)** | VRAM 여유 $<$ 2.0GB (초대형 모델: Qwen 27B, DeepSeek 32B 등). **메인 LLM의 GPU OOM 원천 방지** |
 | **Tier 3: Bypass** | 비활성화 (Bypass) | 0 GB | `--no-laya` 옵션 또는 장애 발생 시 자동 Fail-Open 전환으로 메인 LLM 서비스 무중단 지속 |
+
+### 🛠️ Laya 실시간 의사결정 고도화 및 파인튜닝 파이프라인 (Phase 1 ~ Phase 3)
+
+본 프로젝트는 오픈소스 Laya 엔진의 성능을 극대화하기 위해 3단계 고도화 아키텍처를 탑재하였습니다:
+
+1. **질문 스키마 및 가드레일 외부화 (`laya_questions.yaml`)**:
+   - 코드 수정 없이 YAML 파일 수정만으로 Laya 질문 항목, 카테고리 정의, 분류별 LLM 파라미터(`temperature`, `system_prompt`), 보안 차단 임계값을 동적으로 핫 리로드합니다.
+
+2. **PostgreSQL 감사 로깅 & 통계 추적 (`laya_decision_logs`)**:
+   - 모든 Laya 판별 결과(보안 안전 여부, 카테고리, 신뢰도, 긴급도 점수, 판별 소요 시간, 바이패스 여부)를 백그라운드 비동기(Async)로 DB에 영구 기록합니다.
+   - CLI 명령어 `./docker_run.sh --laya-stats` 및 `--laya-logs`로 실시간 분석이 가능합니다.
+
+3. **오분류 데이터셋 추출 & 로컬 파인튜닝 (`laya_train.py`)**:
+   - **데이터셋 추출**: `python3 db_manager.py laya-export dataset.csv` 명령어로 DB에 누적된 판별 로그를 CSV/JSONL 형태로 즉시 추출합니다.
+   - **로컬 파인튜닝**: `python3 laya_train.py --data dataset.csv` (또는 `./docker_run.sh --train-laya`) 실행 시 Docker 컨테이너의 PyTorch 툴체인을 통해 가볍고 빠르게 파인튜닝을 수행합니다. (VRAM 여유가 부족할 경우 LLM 충돌을 방지하기 위해 CPU 연산으로 자동 안전 전환됩니다).
+   - **커스텀 모델 자동 탑재**: 파인튜닝 완료 시 `custom_laya_model/`에 모델이 저장되며, Laya 엔진 시작 시 이를 감지하여 최우선 기본 모델로 즉시 서빙합니다.
 
 ---
 

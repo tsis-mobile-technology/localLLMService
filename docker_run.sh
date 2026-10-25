@@ -316,16 +316,28 @@ launch_laya() {
         echo "⚡ Laya 가속 모드: CPU + 78GB RAM (VRAM 0GB 사용, GPU OOM 방지)"
     fi
 
+    local custom_model_dir="${SCRIPT_DIR}/custom_laya_model"
+    local laya_model_args=()
+    if [ -d "$custom_model_dir" ] && [ -f "$custom_model_dir/model.safetensors" ]; then
+        echo "🎯 Laya 커스텀 파인튜닝 모델 감지: $custom_model_dir"
+        laya_model_args+=(-v "${custom_model_dir}:/root/custom_laya_model")
+        laya_model_args+=(-e 'LAYA_EXTRA_MODELS={"custom": "/root/custom_laya_model"}')
+        laya_model_args+=(-e "LAYA_DEFAULT_MODEL=custom")
+        laya_model_args+=(-e "LAYA_MODELS=custom,multilingual,english")
+    else
+        laya_model_args+=(-e "LAYA_MODELS=multilingual,english")
+    fi
+
     local laya_out
     if ! laya_out=$(docker run -d --name "$LAYA_CONTAINER" \
         --network "$DOCKER_NETWORK" \
         ${laya_gpu_args[@]+"${laya_gpu_args[@]}"} \
+        ${laya_model_args[@]+"${laya_model_args[@]}"} \
         -p ${LAYA_PORT}:8000 \
         -v "${HOME}/.cache/huggingface:/root/.cache/huggingface" \
         -e "LAYA_HOST=0.0.0.0" \
         -e "LAYA_PORT=8000" \
         -e "LAYA_PRELOAD=1" \
-        -e "LAYA_MODELS=multilingual,english" \
         -e "HF_HOME=/root/.cache/huggingface" \
         "$LAYA_IMAGE" 2>&1); then
 
@@ -397,6 +409,7 @@ launch_litellm() {
         -p ${LITELLM_PORT}:4000 \
         -v "${LITELLM_CONFIG}:/app/config.yaml" \
         -v "${SCRIPT_DIR}/laya_interceptor.py:/app/laya_interceptor.py:ro" \
+        -v "${SCRIPT_DIR}/laya_questions.yaml:/app/laya_questions.yaml:ro" \
         -e "DATABASE_URL=${DATABASE_URL}" \
         -e "LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}" \
         -e "LAYA_API_URL=http://laya-engine:8000/v1/systemone" \
@@ -529,6 +542,39 @@ show_backup_restore_view() {
     fi
 }
 
+show_laya_view() {
+    local lchoice
+    lchoice=$(whiptail --title "🧠 Laya System 1 초고속 결정 엔진 관리" \
+        --menu "원하는 작업을 선택하세요:" 17 75 5 \
+        "1" "📊 실시간 누적 판별 통계 확인 (성공/차단/지연/신뢰도)" \
+        "2" "📋 최근 판별 및 라우팅 이력 조회 (최근 20건)" \
+        "3" "💾 오분류/판별 로그 데이터셋 추출 (Export to CSV)" \
+        "4" "🚀 커스텀 파인튜닝 실행 (laya_train.py)" \
+        "5" "취소 (메인 메뉴로 돌아가기)" \
+        3>&1 1>&2 2>&3) || return 0
+
+    if [ "$lchoice" = "1" ]; then
+        local s_out
+        s_out=$(python3 "$DB_MANAGER" laya-stats 2>&1 || true)
+        whiptail --title "📊 Laya 실시간 누적 통계" --msgbox "$s_out" 22 80
+    elif [ "$lchoice" = "2" ]; then
+        local l_out
+        l_out=$(python3 "$DB_MANAGER" laya-logs 20 2>&1 || true)
+        whiptail --title "📋 Laya 최근 판별 이력" --msgbox "$l_out" 22 105
+    elif [ "$lchoice" = "3" ]; then
+        local exp_path="data/laya_train_exported.csv"
+        local e_out
+        e_out=$(python3 "$DB_MANAGER" laya-export "$exp_path" all 0.0 2>&1 || true)
+        whiptail --title "💾 데이터셋 추출 결과" --msgbox "$e_out\n\n저장 경로: $SCRIPT_DIR/$exp_path" 14 75
+    elif [ "$lchoice" = "4" ]; then
+        whiptail --title "🚀 Laya 로컬 파인튜닝" \
+            --msgbox "Laya 모델 파인튜닝을 시작합니다.\n\n터미널에서 실시간 학습 진행률(에포크, 손실값)이 표시됩니다.\n[확인]을 누르면 기본 데이터셋(data/laya_sample_train.csv)으로 학습을 시작합니다." 14 75
+        python3 "$SCRIPT_DIR/laya_train.py" --data "$SCRIPT_DIR/data/laya_sample_train.csv"
+        echo ""
+        read -rp "학습이 완료되었습니다. 계속하려면 Enter를 누르세요..." _
+    fi
+}
+
 show_hf_account_view() {
     local hf_json text
     hf_json=$(python3 "$RECOMMENDER" hf-status 2>/dev/null || echo "{}")
@@ -613,6 +659,7 @@ show_model_menu() {
     menu_items+=("K" "[🤗 계정] Hugging Face API 토큰 및 계정 연동 상태 확인")
     menu_items+=("U" "[👥 사용자] LiteLLM 사용자 계정 및 API Key 목록 조회")
     menu_items+=("S" "[📊 통계] LiteLLM 토큰 소비 및 요청 로그 통계")
+    menu_items+=("L" "[🧠 Laya] System 1 결정 엔진 통계, 이력 및 파인튜닝")
     menu_items+=("H" "[📜 이력] 모델 다운로드 및 서버 실행 이력 조회")
     menu_items+=("B" "[💾 백업/복원] PostgreSQL DB 수동 백업 및 복구 관리")
 
@@ -931,6 +978,26 @@ main() {
         exit 0
     fi
 
+    if [ "${1:-}" = "--laya-stats" ]; then
+        python3 "$DB_MANAGER" laya-stats
+        exit 0
+    fi
+
+    if [ "${1:-}" = "--laya-logs" ]; then
+        python3 "$DB_MANAGER" laya-logs "${2:-20}"
+        exit 0
+    fi
+
+    if [ "${1:-}" = "--laya-export" ]; then
+        python3 "$DB_MANAGER" laya-export "${2:-data/laya_train_exported.csv}" "${3:-all}" "${4:-0.0}"
+        exit 0
+    fi
+
+    if [ "${1:-}" = "--train-laya" ]; then
+        python3 "$SCRIPT_DIR/laya_train.py" "${@:2}"
+        exit 0
+    fi
+
 
     # Direct launch by number (e.g. ./docker_run.sh 1)
     if [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
@@ -984,6 +1051,9 @@ main() {
             continue
         elif [ "$choice" = "S" ]; then
             show_stats_view
+            continue
+        elif [ "$choice" = "L" ]; then
+            show_laya_view
             continue
         elif [ "$choice" = "H" ]; then
             show_history_view
