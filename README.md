@@ -43,6 +43,19 @@
   - **Tier 3 (Bypass / Fail-Open)**: Laya 장애 발생 또는 `--no-laya` 지정 시 메인 LLM으로 안전 무중단 바이패스
 - **한국어/다국어 & 영어 자동 라우팅**: 한글/비라틴 문자는 `laya-multilingual` (322M), 영어는 `laya` (305M)로 자동 라우팅 로드
 
+### 🔍 한국어 특화 Hugging Face 임베딩(Embedding) 서빙 & 실시간 VRAM 적합도 감지 (NEW!)
+- **한국어 SOTA 임베딩 5종 큐레이션**:
+  - `BAAI/bge-m3` (560M / 1024차원 / ~1.5GB VRAM): Dense, Sparse, Multi-vector 하이브리드 지원, RAG 및 다국어/한국어 검색 표준 SOTA
+  - `nlpai-lab/KURE-v1` (335M / 1024차원 / ~1.0GB VRAM): 고려대 연구실 개발 Ko-MTEB 한국어 벤치마크 1위권
+  - `jhgan/ko-sroberta-multitask` (110M / 768차원 / ~400MB VRAM): VRAM 400MB 미만 초경량, 빠른 추론 속도
+  - `dragonkue/BGE-m3-ko` (560M / 1024차원 / ~1.5GB VRAM): BGE-M3 한국어 집중 파인튜닝
+  - `intfloat/multilingual-e5-small` (118M / 384차원 / ~350MB VRAM): 350MB 극저용량 및 안정적인 다국어/한국어 검색
+- **Hugging Face TEI (Text Embeddings Inference) 초고속 컨테이너 연동**:
+  - 포트 `8088`에서 OpenAI 호환 `/v1/embeddings` 엔드포인트 제공
+  - 메인 LLM 구동 후 **실시간 잔여 VRAM(Free VRAM)**을 정밀 측정하여 `[100% GPU / 원활]`, `[GPU 주의 / 타이트]`, `[VRAM 부족 / CPU 권장]` 자동 태깅 및 대화형 선택
+- **LiteLLM 프록시 자동 통합**:
+  - `http://localhost:4000/v1/embeddings` 단일 게이트웨이로 메인 LLM 대화와 임베딩 벡터 생성을 동시 라우팅 (`model: text-embedding-3-small` 또는 원본 모델명)
+
 ### 💎 LiteLLM 프록시 & 다중 사용자 관리
 - **OpenAI 호환 API**: `:4000/v1` 엔드포인트 제공 (`/v1/chat/completions`, `/v1/models` 등)
 - **다중 사용자 및 API Key 발급**: 사용자별 독립된 API Key 및 월간 예산(`max_budget`) 한도 설정 지원
@@ -106,6 +119,11 @@ chmod +x docker_run.sh docker_stop.sh docker_down.sh
 ./docker_run.sh --laya-export data/laya_train.csv # DB에 적재된 판별 로그를 파인튜닝용 데이터셋으로 내보내기
 ./docker_run.sh --train-laya  # Laya 로컬 파인튜닝 실행 (샘플 또는 추출 데이터셋 기반 초경량 학습)
 ./docker_run.sh --no-laya 1   # Laya 결정 엔진을 구동하지 않고 LLM 단독 실행 (Tier 3)
+
+# 한국어 임베딩(TEI) 모델 관리 & 테스트 (NEW!)
+./docker_run.sh --embedding-list   # 한국어 임베딩 모델 목록 및 현재 VRAM 적합도 확인
+./docker_run.sh --embedding-status # TEI 임베딩 컨테이너 가동 상태 점검
+./test_curl.sh --embedding "한국어 문서 검색 및 임베딩 벡터 생성 테스트" # 임베딩 벡터 생성 테스트
 
 # 플랫폼 통합 관리
 ./docker_run.sh --reload      # 모델 저장소(~/Projects/models) 즉시 재스캔 및 감지 모델 요약

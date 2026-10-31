@@ -40,3 +40,6 @@ litellm_config.yaml
 backups/*.sql
 !backups/.gitkeep
 
+# Graphify Knowledge Graph
+graphify-out/
+

@@ -63,6 +63,16 @@ readonly LAYA_IMAGE="local-laya:latest"
 LAYA_ENABLED="${LAYA_ENABLED:-true}"
 LAYA_CURRENT_TIER="bypass"
 
+# Hugging Face TEI Embedding Integration
+readonly EMBEDDING_CONTAINER="embedding-server"
+readonly EMBEDDING_PORT=8088
+readonly EMBEDDING_IMAGE_GPU="ghcr.io/huggingface/text-embeddings-inference:1.6"
+readonly EMBEDDING_IMAGE_CPU="ghcr.io/huggingface/text-embeddings-inference:cpu-1.6"
+EMBEDDING_SELECTED_MODEL=""
+EMBEDDING_SELECTED_MODE=""
+EMBEDDING_ENABLED="${EMBEDDING_ENABLED:-auto}"
+EMBEDDING_CLI_CHOICE=""
+
 # Docker GPU Support Flag
 DOCKER_GPU_SUPPORT=true
 
@@ -257,6 +267,20 @@ get_laya_status() {
     fi
 }
 
+get_embedding_status() {
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${EMBEDDING_CONTAINER}$"; then
+        if curl -s "http://localhost:${EMBEDDING_PORT}/health" &>/dev/null || curl -s "http://localhost:${EMBEDDING_PORT}/" &>/dev/null; then
+            echo "🟢 UP"
+        else
+            echo "🟡 STARTING"
+        fi
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${EMBEDDING_CONTAINER}$"; then
+        echo "🔴 STOPPED"
+    else
+        echo "⚫ OFF"
+    fi
+}
+
 stop_existing_container() {
     local status litellm_status
     litellm_status=$(get_litellm_status)
@@ -270,6 +294,11 @@ stop_existing_container() {
     if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${LAYA_CONTAINER}$"; then
         docker stop "$LAYA_CONTAINER" 2>/dev/null || true
         docker rm -f "$LAYA_CONTAINER" 2>/dev/null || true
+    fi
+
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${EMBEDDING_CONTAINER}$"; then
+        docker stop "$EMBEDDING_CONTAINER" 2>/dev/null || true
+        docker rm -f "$EMBEDDING_CONTAINER" 2>/dev/null || true
     fi
 
     if [[ "$status" != "⚫ NOT RUNNING" ]]; then
@@ -359,9 +388,24 @@ launch_laya() {
 
 generate_litellm_config() {
     local tier="${1:-gpu}"
+    local embedding_repo="${2:-$EMBEDDING_SELECTED_MODEL}"
     local callback_entry=""
     if [ "$tier" != "bypass" ] && [ "$LAYA_ENABLED" != "false" ]; then
         callback_entry="  callbacks: [\"laya_interceptor.proxy_handler_instance\"]"
+    fi
+
+    local embedding_entries=""
+    if [ -n "$embedding_repo" ]; then
+        embedding_entries="  - model_name: \"text-embedding-3-small\"
+    litellm_params:
+      model: \"openai/${embedding_repo}\"
+      api_base: \"http://host.docker.internal:${EMBEDDING_PORT}/v1\"
+      api_key: \"none\"
+  - model_name: \"${embedding_repo}\"
+    litellm_params:
+      model: \"openai/${embedding_repo}\"
+      api_base: \"http://host.docker.internal:${EMBEDDING_PORT}/v1\"
+      api_key: \"none\""
     fi
 
     cat > "$LITELLM_CONFIG" <<YAML
@@ -386,6 +430,7 @@ model_list:
     model_info:
       max_input_tokens: 32768
       max_tokens: 8192
+$embedding_entries
 
 litellm_settings:
   drop_params: true
@@ -446,6 +491,137 @@ launch_litellm() {
             16 75
         return 1
     fi
+}
+
+launch_embedding_server() {
+    local choice="$1"
+    local model_info
+    model_info=$(python3 "$RECOMMENDER" embedding-get "$choice" 2>/dev/null || echo "")
+    if [ -z "$model_info" ]; then
+        echo "⚠️ 임베딩 모델 정보를 찾을 수 없습니다: $choice"
+        return 1
+    fi
+
+    local repo name mode min_vram tag
+    repo=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['repo'])" "$model_info")
+    name=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$model_info")
+    mode=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['recommended_mode'])" "$model_info")
+    min_vram=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['min_vram_gb'])" "$model_info")
+    tag=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['tag'])" "$model_info")
+
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🔍 Hugging Face TEI 임베딩 컨테이너 기동: $repo"
+    echo "   • 모델: $name (권장 VRAM: ${min_vram}GB, 적합도: $tag)"
+    echo "   • 실행 모드: $mode"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    docker rm -f "$EMBEDDING_CONTAINER" &>/dev/null || true
+
+    local gpu_args=()
+    local container_image
+    if [ "$mode" = "gpu" ] && [ "$DOCKER_GPU_SUPPORT" = "true" ]; then
+        gpu_args+=(--gpus all)
+        gpu_args+=(-e "CUDA_VISIBLE_DEVICES=0")
+        container_image="$EMBEDDING_IMAGE_GPU"
+    else
+        container_image="$EMBEDDING_IMAGE_CPU"
+        echo "ℹ️ 임베딩 서버를 CPU 모드로 구동합니다."
+    fi
+
+    local hf_token_env=()
+    if [ -n "${HF_TOKEN:-}" ]; then
+        hf_token_env+=(-e "HF_TOKEN=$HF_TOKEN")
+    fi
+
+    mkdir -p "$MODELS_DIR/tei_cache"
+
+    local docker_out
+    if ! docker_out=$(docker run -d --name "$EMBEDDING_CONTAINER" \
+        --network "$DOCKER_NETWORK" \
+        ${gpu_args[@]+"${gpu_args[@]}"} \
+        ${hf_token_env[@]+"${hf_token_env[@]}"} \
+        -p ${EMBEDDING_PORT}:80 \
+        -v "${MODELS_DIR}/tei_cache:/data" \
+        -e "HF_HOME=/data" \
+        "$container_image" \
+        --model-id "$repo" \
+        --port 80 \
+        --auto-truncate 2>&1); then
+
+        echo "⚠️ 임베딩 컨테이너 시작 실패: $docker_out"
+        whiptail --title "⚠️ 임베딩 컨테이너 경고" \
+            --msgbox "임베딩 컨테이너 시작 중 오류가 발생했습니다:\n\n$docker_out\n\n메인 LLM은 계속 작동합니다." \
+            16 75
+        return 1
+    fi
+
+    EMBEDDING_SELECTED_MODEL="$repo"
+    EMBEDDING_SELECTED_MODE="$mode"
+
+    echo "⏳ 임베딩 모델 로드 대기 중 (포트 $EMBEDDING_PORT)..."
+    local retries=25
+    while [ $retries -gt 0 ]; do
+        if curl -s "http://localhost:${EMBEDDING_PORT}/health" &>/dev/null || curl -s "http://localhost:${EMBEDDING_PORT}/" &>/dev/null; then
+            echo "🟢 임베딩 서버 정상 가동 확인 (포트 $EMBEDDING_PORT, $repo)"
+            break
+        fi
+        sleep 1
+        retries=$((retries - 1))
+    done
+    return 0
+}
+
+ask_and_launch_embedding() {
+    if [ "$EMBEDDING_ENABLED" = "false" ]; then
+        echo "ℹ️ 임베딩 모델 서빙 비활성화 (--no-embedding)"
+        return 0
+    fi
+
+    local direct_choice="${1:-$EMBEDDING_CLI_CHOICE}"
+
+    if [ -n "$direct_choice" ]; then
+        if [ "$direct_choice" = "0" ] || [ "$direct_choice" = "none" ] || [ "$direct_choice" = "skip" ]; then
+            echo "ℹ️ 임베딩 모델 추가 없이 단독 서빙합니다."
+            return 0
+        fi
+        launch_embedding_server "$direct_choice" || true
+        return 0
+    fi
+
+    local free_vram
+    free_vram=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('free_vram_gb', 0.0))" "$(python3 "$RECOMMENDER" embedding-list 2>/dev/null || echo '{}')")
+
+    local menu_json
+    menu_json=$(python3 "$RECOMMENDER" embedding-menu 2>/dev/null || echo '[]')
+    local menu_items=()
+    mapfile -t menu_items < <(python3 -c "import json, sys; [print(x) for x in json.loads(sys.argv[1])]" "$menu_json")
+
+    if [ ${#menu_items[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    local selected_choice
+    selected_choice=$(whiptail \
+        --title "🔍 한국어 임베딩(Embedding) 모델 추가 서빙 선택" \
+        --menu "메인 LLM 구동 후 현재 잔여 VRAM: ${free_vram} GB\n\n한국어 RAG / 벡터 검색을 위한 임베딩 모델을 추가 서빙하시겠습니까?\n(LiteLLM :4000/v1/embeddings 엔드포인트에 자동 연결됩니다):" \
+        22 92 6 \
+        "${menu_items[@]}" \
+        3>&1 1>&2 2>&3) || return 0
+
+    if [ "$selected_choice" = "0" ] || [ -z "$selected_choice" ]; then
+        echo "ℹ️ 임베딩 모델 추가 없이 메인 LLM 단독 서빙합니다."
+        return 0
+    fi
+
+    launch_embedding_server "$selected_choice" || true
+}
+
+show_embedding_view() {
+    local text
+    text=$(python3 "$RECOMMENDER" embedding-summary 2>/dev/null || echo "임베딩 모델 정보 로드 실패")
+    whiptail --title "🔍 한국어 Hugging Face 임베딩 모델 및 VRAM 적합도" \
+        --msgbox "$text\n[안내] 메인 LLM 모델 선택 및 구동 시 추가 서빙 여부를 묻는 메뉴가 나타납니다." \
+        24 85
 }
 
 ask_litellm_option() {
@@ -645,12 +821,13 @@ for m in models:
 # --- UI & Model Selection ----------------------------------------------------
 
 show_model_menu() {
-    local container_status litellm_status pg_status laya_status status_line env_summary
+    local container_status litellm_status pg_status laya_status emb_status status_line env_summary
     container_status=$(get_container_status)
     litellm_status=$(get_litellm_status)
     pg_status=$(get_postgres_status)
     laya_status=$(get_laya_status)
-    status_line="PG: $pg_status │ Laya: $laya_status │ llama.cpp: $container_status │ liteLLM: $litellm_status"
+    emb_status=$(get_embedding_status)
+    status_line="PG: $pg_status │ Laya: $laya_status │ Emb: $emb_status │ llama.cpp: $container_status │ liteLLM: $litellm_status"
     env_summary=$(python3 "$RECOMMENDER" env-summary)
 
     if [ "$DOCKER_GPU_SUPPORT" = "false" ]; then
@@ -665,6 +842,7 @@ show_model_menu() {
     mapfile -t menu_items < <(python3 -c "import json, sys; [print(x) for x in json.loads(sys.argv[1])]" "$menu_json")
 
     # Add management actions
+    menu_items+=("E" "[🔍 임베딩] 한국어 Hugging Face 임베딩 모델 및 VRAM 적합도 확인")
     menu_items+=("R" "[🔄 새로고침] 모델 저장소 폴더 재스캔 (Reload)")
     menu_items+=("K" "[🤗 계정] Hugging Face API 토큰 및 계정 연동 상태 확인")
     menu_items+=("U" "[👥 사용자] LiteLLM 사용자 계정 및 API Key 목록 조회")
@@ -880,6 +1058,13 @@ show_launch_success() {
         laya_msg="\n• Laya 엔진:   ⚪ 바이패스 모드 (비활성)"
     fi
 
+    local emb_msg=""
+    local emb_st
+    emb_st=$(get_embedding_status)
+    if [[ "$emb_st" != "⚫ OFF" && "$emb_st" != "🔴 STOPPED" ]]; then
+        emb_msg="\n• 임베딩 서버: 🟢 TEI ($EMBEDDING_SELECTED_MODEL, 포트 $EMBEDDING_PORT)"
+    fi
+
     local mode_msg=""
     if [ "$DOCKER_GPU_SUPPORT" = "false" ]; then
         mode_msg="\n[모드]: CPU 모드 (GPU 툴킷 미설치)"
@@ -892,9 +1077,9 @@ show_launch_success() {
         lora_msg="\n• 베이스 모델: $filename\n• LoRA 어댑터: $lora_file (결합 구동)"
     fi
 
-    whiptail --title "✅ 실행 성공 (PostgreSQL & Laya 연동 완료)" \
-        --yesno "LLaMA.cpp 및 서비스가 성공적으로 실행되었습니다!\n\n• 모델:       $name${lora_msg}\n• llama.cpp:   http://localhost:$PORT\n• PostgreSQL: 🟢 DB 저장 연동 완료 (포트 $POSTGRES_PORT)${laya_msg}${mode_msg}${litellm_msg}\n\n컨테이너 실시간 로그를 확인하시겠습니까?\n(종료하려면 Ctrl+C)" \
-        22 80 \
+    whiptail --title "✅ 실행 성공 (PostgreSQL & Laya & Embedding 연동 완료)" \
+        --yesno "LLaMA.cpp 및 서비스가 성공적으로 실행되었습니다!\n\n• 모델:       $name${lora_msg}\n• llama.cpp:   http://localhost:$PORT\n• PostgreSQL: 🟢 DB 저장 연동 완료 (포트 $POSTGRES_PORT)${laya_msg}${emb_msg}${mode_msg}${litellm_msg}\n\n컨테이너 실시간 로그를 확인하시겠습니까?\n(종료하려면 Ctrl+C)" \
+        23 82 \
         --yes-button "Tail Logs" --no-button "Exit"
 }
 
@@ -910,6 +1095,36 @@ main() {
                 export LAYA_ENABLED=false
                 echo "ℹ️  Laya 결정 엔진 비활성화 (--no-laya)"
                 shift
+                ;;
+            --embedding)
+                EMBEDDING_CLI_CHOICE="${2:-}"
+                shift 2
+                ;;
+            --no-embedding)
+                EMBEDDING_ENABLED=false
+                echo "ℹ️  임베딩 모델 서빙 비활성화 (--no-embedding)"
+                shift
+                ;;
+            --embedding-status)
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "🔍 임베딩 (TEI) 컨테이너 상태 점검:"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                local e_st
+                e_st=$(get_embedding_status)
+                echo "• 컨테이너 상태: $e_st (포트: $EMBEDDING_PORT)"
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${EMBEDDING_CONTAINER}$"; then
+                    echo "• 헬스체크 응답:"
+                    curl -s "http://localhost:${EMBEDDING_PORT}/health" 2>/dev/null || curl -s "http://localhost:${EMBEDDING_PORT}/"
+                    echo ""
+                else
+                    echo "• 현재 가동 중이지 않습니다."
+                fi
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                exit 0
+                ;;
+            --embedding-list|--embedding-check)
+                python3 "$RECOMMENDER" embedding-summary
+                exit 0
                 ;;
             --laya-status)
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1037,8 +1252,11 @@ main() {
 
         stop_existing_container
         launch_model "$direct_choice"
+        if [ "$EMBEDDING_ENABLED" != "false" ]; then
+            ask_and_launch_embedding "$EMBEDDING_CLI_CHOICE" || true
+        fi
         launch_laya "$laya_tier" || true
-        generate_litellm_config "$laya_tier"
+        generate_litellm_config "$laya_tier" "$EMBEDDING_SELECTED_MODEL"
         launch_litellm "$laya_tier" || true
         echo "✅ 모델 구동 완료! llama.cpp: http://localhost:$PORT | Laya: http://localhost:$LAYA_PORT ($laya_tier) | liteLLM: http://localhost:$LITELLM_PORT"
         exit 0
@@ -1050,7 +1268,10 @@ main() {
         choice=$(show_model_menu) || exit 0
 
         # Handle management views
-        if [ "$choice" = "R" ]; then
+        if [ "$choice" = "E" ]; then
+            show_embedding_view
+            continue
+        elif [ "$choice" = "R" ]; then
             show_reload_view
             continue
         elif [ "$choice" = "K" ]; then
@@ -1090,9 +1311,12 @@ main() {
             launch_model "$choice" || exit 1
 
             if [[ "$use_litellm" == "true" ]]; then
+                # Check VRAM and ask user about Korean embedding model serving
+                ask_and_launch_embedding || true
+
                 echo "🧠 Laya 스마트 3-Tier 결정: [$laya_tier] $laya_reason"
                 launch_laya "$laya_tier" || true
-                generate_litellm_config "$laya_tier"
+                generate_litellm_config "$laya_tier" "$EMBEDDING_SELECTED_MODEL"
                 sleep 2
                 launch_litellm "$laya_tier" || true
             fi

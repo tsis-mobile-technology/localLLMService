@@ -634,6 +634,137 @@ UNSLOTH_CATALOG = [
     }
 ]
 
+# Curated High-Quality Korean Embedding Models (Hugging Face / TEI optimized)
+KOREAN_EMBEDDING_CATALOG = [
+    {
+        "id": "bge-m3",
+        "name": "BAAI/bge-m3",
+        "repo": "BAAI/bge-m3",
+        "params": "560M",
+        "dim": 1024,
+        "max_seq": 8192,
+        "min_vram_gb": 1.5,
+        "desc": "한국어/다국어 Dense+Sparse+Multi-Vector 하이브리드 SOTA",
+        "is_featured": True,
+    },
+    {
+        "id": "kure-v1",
+        "name": "nlpai-lab/KURE-v1",
+        "repo": "nlpai-lab/KURE-v1",
+        "params": "335M",
+        "dim": 1024,
+        "max_seq": 4096,
+        "min_vram_gb": 1.0,
+        "desc": "Ko-MTEB 한국어 벤치마크 1위권 고품질 한국어 특화",
+        "is_featured": True,
+    },
+    {
+        "id": "ko-sroberta",
+        "name": "jhgan/ko-sroberta-multitask",
+        "repo": "jhgan/ko-sroberta-multitask",
+        "params": "110M",
+        "dim": 768,
+        "max_seq": 512,
+        "min_vram_gb": 0.4,
+        "desc": "VRAM 400MB 미만 초경량, 빠른 추론 속도 및 실시간 검색",
+        "is_featured": True,
+    },
+    {
+        "id": "bge-m3-ko",
+        "name": "dragonkue/BGE-m3-ko",
+        "repo": "dragonkue/BGE-m3-ko",
+        "params": "560M",
+        "dim": 1024,
+        "max_seq": 8192,
+        "min_vram_gb": 1.5,
+        "desc": "BGE-M3 기반 한국어 정제 데이터셋 특화 파인튜닝",
+        "is_featured": False,
+    },
+    {
+        "id": "multilingual-e5-small",
+        "name": "intfloat/multilingual-e5-small",
+        "repo": "intfloat/multilingual-e5-small",
+        "params": "118M",
+        "dim": 384,
+        "max_seq": 512,
+        "min_vram_gb": 0.35,
+        "desc": "VRAM 350MB 극저용량 및 안정적인 다국어/한국어 검색",
+        "is_featured": False,
+    },
+]
+
+
+def get_embedding_recommendations(hw=None):
+    """Evaluates Korean embedding models against current available GPU VRAM."""
+    if hw is None:
+        hw = detect_hardware()
+    free_vram = hw.get("gpu", {}).get("free_vram_gb", 0.0)
+    has_gpu = hw.get("gpu", {}).get("count", 0) > 0
+
+    results = []
+    for m in KOREAN_EMBEDDING_CATALOG:
+        entry = dict(m)
+        min_vram = m["min_vram_gb"]
+        entry["current_free_vram_gb"] = free_vram
+
+        if not has_gpu:
+            entry["status"] = "cpu"
+            entry["tag"] = "[CPU 모드]"
+            entry["can_gpu"] = False
+            entry["recommended_mode"] = "cpu"
+        elif free_vram >= min_vram + 0.5:
+            entry["status"] = "gpu_optimal"
+            entry["tag"] = "[100% GPU / 원활]"
+            entry["can_gpu"] = True
+            entry["recommended_mode"] = "gpu"
+        elif free_vram >= min_vram:
+            entry["status"] = "gpu_tight"
+            entry["tag"] = "[GPU 주의 / 타이트]"
+            entry["can_gpu"] = True
+            entry["recommended_mode"] = "gpu"
+        else:
+            entry["status"] = "vram_insufficient"
+            entry["tag"] = "[VRAM 부족 / CPU 권장]"
+            entry["can_gpu"] = False
+            entry["recommended_mode"] = "cpu"
+        results.append(entry)
+    return results
+
+
+def format_whiptail_embedding_menu_items(recommendations):
+    """Formats recommendations into list suitable for whiptail menu."""
+    items = []
+    for idx, m in enumerate(recommendations, 1):
+        items.append(str(idx))
+        items.append(f"{m['name']} ({m['params']}) {m['tag']} - {m['desc']}")
+    items.append("0")
+    items.append("[선택 안 함] 임베딩 모델 추가 없이 메인 LLM 단독 서빙")
+    return items
+
+
+def print_embedding_summary(hw=None):
+    """Prints a console summary of available Korean embedding models and VRAM status."""
+    if hw is None:
+        hw = detect_hardware()
+    recs = get_embedding_recommendations(hw)
+    free_vram = hw.get("gpu", {}).get("free_vram_gb", 0.0)
+    total_vram = hw.get("gpu", {}).get("total_vram_gb", 0.0)
+
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("🔍 한국어 특화 Hugging Face 임베딩(Embedding) 모델 추천 현황:")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    if hw.get("gpu", {}).get("count", 0) > 0:
+        print(f"• 현재 가용 VRAM : {free_vram:.1f} GB / 총 {total_vram:.1f} GB ({hw['gpu']['name']})")
+    else:
+        print("• GPU 상태       : CPU-Only 환경 (CPU 모드로 구동 권장)")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    for idx, m in enumerate(recs, 1):
+        print(f"  {idx}. {m['name']} ({m['params']} · {m['dim']}차원) {m['tag']}")
+        print(f"     HF Repo: {m['repo']} │ 최소 권장 VRAM: {m['min_vram_gb']}GB")
+        print(f"     설명   : {m['desc']}")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+
 # GGUF Binary Protocol Definition & Type Sizes (v2/v3 Specification)
 GGUF_TYPE_SIZE = {
     0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8
@@ -1496,6 +1627,56 @@ def main():
             target_model = {"recommended_vram_gb": 6.5, "name": "Default Model"}
         tier_info = determine_laya_tier(target_model, hw)
         print(json.dumps(tier_info, ensure_ascii=False))
+        sys.exit(0)
+
+    # 13. Embedding recommendations (JSON)
+    elif cmd == "embedding-list":
+        hw = detect_hardware()
+        recs = get_embedding_recommendations(hw)
+        print(json.dumps({
+            "free_vram_gb": hw["gpu"]["free_vram_gb"],
+            "total_vram_gb": hw["gpu"]["total_vram_gb"],
+            "models": recs
+        }, ensure_ascii=False, indent=2))
+        sys.exit(0)
+
+    # 14. Embedding whiptail menu items (JSON list)
+    elif cmd == "embedding-menu":
+        hw = detect_hardware()
+        recs = get_embedding_recommendations(hw)
+        menu_items = format_whiptail_embedding_menu_items(recs)
+        print(json.dumps(menu_items, ensure_ascii=False))
+        sys.exit(0)
+
+    # 15. Get embedding model info by index or repo/id
+    elif cmd == "embedding-get":
+        if len(sys.argv) < 3:
+            print("Usage: hf_recommender.py embedding-get <1-based index or repo/id>")
+            sys.exit(1)
+        target = sys.argv[2]
+        hw = detect_hardware()
+        recs = get_embedding_recommendations(hw)
+        selected = None
+        if target.isdigit():
+            idx = int(target) - 1
+            if 0 <= idx < len(recs):
+                selected = recs[idx]
+        else:
+            for r in recs:
+                if r["id"] == target or r["repo"] == target or r["name"] == target:
+                    selected = r
+                    break
+        if selected:
+            print(json.dumps(selected, ensure_ascii=False))
+            sys.exit(0)
+        else:
+            print(f"Error: Unknown embedding model '{target}'", file=sys.stderr)
+            sys.exit(1)
+
+    # 16. Console summary of Korean embedding recommendations
+    elif cmd == "embedding-summary":
+        hw = detect_hardware()
+        print_embedding_summary(hw)
         sys.exit(0)
 
 
